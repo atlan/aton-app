@@ -13,5 +13,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install --quiet pytest "ruamel.yaml" pyyaml
+      # ⚠ Die Liste ist in einer LEEREN Umgebung ermittelt, nicht aus dem Kopf: der
+      # erste Entwurf liess Pillow und Jinja2 weg, weil hier lokal beides installiert
+      # ist. Auf GitHub brachen daraufhin alle drei Laeufe beim Einsammeln ab
+      # („No module named 'PIL'"). Jedes der vier Pakete einzeln entfernt und
+      # nachgeprueft, dass die Tests dann wirklich scheitern.
+      - run: pip install --quiet pytest "ruamel.yaml" pyyaml Pillow jinja2
       - run: python -m pytest tests -q
