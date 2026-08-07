@@ -82,6 +82,7 @@ aton/                 the app (add-on)
   tools/              build fonts, read the browser console
 
 custom_components/aton/   the companion integration (HACS)
+  brand/              icon and logo shown by Home Assistant (2026.3 and newer)
 tests/                    what a silent bug would cost most — see below
 docs/                     the documentation you are reading
 ```

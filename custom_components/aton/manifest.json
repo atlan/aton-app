@@ -1,7 +1,7 @@
 {
   "domain": "aton",
   "name": "Aton",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentation": "https://github.com/atlan/aton-app",
   "issue_tracker": "https://github.com/atlan/aton-app/issues",
   "codeowners": ["@atlan"],
