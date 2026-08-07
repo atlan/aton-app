@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "bestaetigen": {
+        "title": "Aton",
+        "description": "Die App \"{host}\" wurde gefunden. Einrichten?"
+      },
+      "user": {
+        "title": "Aton",
+        "description": "Adresse der App. Läuft sie als App auf diesem Home Assistant, passen die Vorgaben.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Keine Antwort. Läuft die App, und stimmen Host und Port?",
+      "unexpected_response": "Dort antwortet etwas anderes als die Matrix-Panel-App."
+    },
+    "abort": {
+      "already_configured": "Diese App ist bereits eingerichtet.",
+      "cannot_connect": "Keine Antwort von der App.",
+      "unexpected_response": "Dort antwortet etwas anderes als die Matrix-Panel-App."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "erreichbar": { "name": "Erreichbar" },
+      "zeigt_an": { "name": "Zeigt an" }
+    },
+    "button": {
+      "vollbild": { "name": "Vollbild senden" }
+    },
+    "number": {
+      "helligkeit": { "name": "Helligkeit" }
+    },
+    "image": {
+      "vorschau": { "name": "Vorschau" }
+    },
+    "sensor": {
+      "frames": { "name": "Bilder" },
+      "pixel": { "name": "Geänderte Pixel" },
+      "bytes": { "name": "Bytes je Bild" },
+      "fehler": { "name": "Sendefehler" },
+      "letzter_fehler": { "name": "Letzter Fehler" }
+    }
+  }
+}

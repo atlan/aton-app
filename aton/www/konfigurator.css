@@ -1,0 +1,217 @@
+/* Konfigurator — drei Spalten: Struktur, Vorschau, Formular.
+   Kein externes Stylesheet, keine Schriftdatei: Ingress liefert die Seite unter einem
+   wechselnden Pfad aus, und die Seite soll ohne Netz auskommen. */
+
+.k-raster {
+  display: grid;
+  grid-template-columns: 250px minmax(320px, 1fr) 330px;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .k-raster { grid-template-columns: 1fr; }
+}
+
+.k-feld {
+  background: #1a1f24;
+  border: 1px solid #2a3138;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.k-feld h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+/* --- Baum --------------------------------------------------------------- */
+.k-baum { font-size: 13px; line-height: 1.7; }
+.k-baum ul { list-style: none; margin: 0; padding-left: 14px; }
+.k-baum > ul { padding-left: 0; }
+.k-knoten {
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.k-knoten:hover { background: #22282e; }
+.k-knoten.aktiv { background: #1f3a52; color: #cfe6ff; }
+.k-knoten .k-typ { color: #6b7681; font-size: 11px; }
+.k-zweig { color: #8b949e; font-weight: 600; }
+
+/* --- Vorschau ----------------------------------------------------------- */
+.k-buehne { position: relative; display: inline-block; max-width: 100%; }
+.k-buehne img {
+  display: block;
+  image-rendering: pixelated;
+  border: 1px solid #2a3138;
+  border-radius: 4px;
+  max-width: 100%;
+}
+.k-kachel {
+  position: absolute;
+  border: 1px solid rgba(120, 170, 255, .35);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.k-kachel:hover { background: rgba(120, 170, 255, .14); }
+.k-kachel.aktiv {
+  border-color: #7ab8ff;
+  background: rgba(120, 170, 255, .22);
+  box-shadow: 0 0 0 1px #7ab8ff;
+}
+.k-hinweis { color: #8b949e; font-size: 12px; margin-top: 8px; }
+
+/* --- Formular ----------------------------------------------------------- */
+.k-form label { display: block; margin-bottom: 12px; font-size: 12px; }
+.k-form .k-label { color: #8b949e; display: block; margin-bottom: 3px; }
+.k-form .k-hilfe { color: #6b7681; font-size: 11px; margin-top: 3px; line-height: 1.45; }
+.k-form input[type=text], .k-form input[type=number], .k-form select, .k-form textarea {
+  width: 100%;
+  background: #22282e;
+  color: #e6e8ea;
+  border: 1px solid #333b43;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.k-form textarea { min-height: 62px; resize: vertical; font-family: ui-monospace, monospace; }
+.k-form input:focus, .k-form select:focus, .k-form textarea:focus {
+  outline: none; border-color: #4a7fb5;
+}
+.k-paar { display: flex; gap: 6px; }
+.k-paar input { flex: 1; }
+.k-farbe { display: flex; gap: 6px; align-items: center; }
+.k-farbe input[type=color] {
+  width: 34px; height: 30px; padding: 0; border: 1px solid #333b43;
+  border-radius: 6px; background: #22282e;
+}
+.k-zeile { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+
+.k-knopf {
+  background: #22282e; color: #e6e8ea; border: 1px solid #333b43;
+  border-radius: 6px; padding: 5px 11px; font-size: 13px; cursor: pointer;
+}
+.k-knopf:hover { border-color: #4a5560; }
+.k-knopf.k-haupt { background: #1f3a52; border-color: #33628f; }
+.k-knopf.k-gefahr:hover { border-color: #8f3333; color: #ff9d9d; }
+.k-knopf:disabled { opacity: .45; cursor: default; }
+
+.k-meldung { margin-top: 10px; padding: 9px 11px; border-radius: 6px; font-size: 12px;
+             white-space: pre-wrap; font-family: ui-monospace, monospace; }
+.k-meldung.k-fehler { background: #2b1d1f; color: #ff9d9d; }
+.k-meldung.k-gut { background: #17351f; color: #8ee79c; }
+
+.k-vorschlag {
+  position: absolute; z-index: 20; background: #1a1f24; border: 1px solid #333b43;
+  border-radius: 6px; max-height: 220px; overflow-y: auto; font-size: 12px;
+  min-width: 260px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+}
+.k-vorschlag div { padding: 4px 9px; cursor: pointer; }
+.k-vorschlag div:hover { background: #22282e; }
+.k-vorschlag .k-leer { color: #6b7681; }
+
+.k-symbolgitter { display: grid; grid-template-columns: repeat(auto-fill, 44px); gap: 5px;
+                  max-height: 190px; overflow-y: auto; margin-top: 5px; }
+.k-symbolgitter img { width: 40px; height: 40px; image-rendering: pixelated; padding: 2px;
+                      border: 1px solid #2a3138; border-radius: 5px; cursor: pointer;
+                      background: #0d1013; }
+.k-symbolgitter img:hover { border-color: #4a7fb5; }
+.k-symbolgitter img.aktiv { border-color: #7ab8ff; background: #1f3a52; }
+
+.k-reiter { display: flex; gap: 4px; margin-bottom: 16px; }
+.k-reiter button {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: #8b949e; padding: 7px 13px; font-size: 14px; cursor: pointer;
+}
+.k-reiter button.aktiv { color: #e6e8ea; border-bottom-color: #7ab8ff; }
+.k-kopf { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+          margin-bottom: 12px; }
+.k-kopf .k-wachs { flex: 1; }
+.k-marke-warn { background: #3a2f1f; color: #f0c674; }
+
+/* --- Baum: Pfeile, Namen, Lage --- */
+.k-pfeil { width: 11px; flex: none; color: #6b7681; font-size: 10px; user-select: none; }
+.k-pfeil:hover { color: #cfe6ff; }
+.k-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-lage { color: #6b7681; font-size: 11px; font-family: ui-monospace, monospace; flex: none; }
+.k-baum ul { padding-left: 11px; }
+.k-baum { max-height: 72vh; overflow-y: auto; }
+.k-kachel { user-select: none; }
+
+/* Nicht gesetzte Farbe: das Feld zeigt die wirkende Vorgabe, sagt aber, dass sie nur
+   geerbt ist — sonst liest man einen leeren Hintergrund als weissen. */
+.k-farbe input[type=color].k-ungesetzt { opacity: .4; border-style: dashed; }
+.k-farbe .k-knopf { padding: 4px 8px; line-height: 1; }
+
+.k-plus { color: #6b7681; flex: none; padding: 0 3px; font-weight: 700; }
+.k-plus:hover { color: #8ee79c; }
+
+/* Ein Bereich (Meldezeile, Screen-Gruppe) ist keine Kachel: gestrichelt und in einer
+   anderen Farbe, damit man beides auf der Vorschau auseinanderhaelt.
+
+   ⚠ Bereiche liegen HINTER den Kacheln. Der Bereich einer Screen-Gruppe deckt naemlich
+   alle ihre Kacheln zu (gemessen: 8 von 8) — laege er obenauf, waere keine davon mehr
+   anklickbar. Dass es bisher trotzdem ging, lag nur an der Reihenfolge im Dokument;
+   ein `z-index` macht daraus eine Zusage. */
+.k-kachel { z-index: 1; }
+.k-kachel.k-bereich { z-index: 0; border-style: dashed;
+                      border-color: rgba(240, 198, 116, .45); }
+.k-kachel.k-bereich:hover { background: rgba(240, 198, 116, .12); }
+.k-kachel.k-bereich.aktiv { border-color: #f0c674; background: rgba(240, 198, 116, .18);
+                            box-shadow: 0 0 0 1px #f0c674; }
+
+/* Schriftregeln: je Schrift ein Kasten, damit man die zwei Schalter nicht der falschen
+   Schrift zuordnet. */
+.k-schrift { border: 1px solid #2a3138; border-radius: 8px; padding: 9px 11px;
+             margin-bottom: 10px; background: #171c21; }
+.k-schrift-kopf { display: flex; align-items: center; gap: 8px; margin-bottom: 7px;
+                  font-family: ui-monospace, monospace; font-size: 12px; }
+.k-schrift-kopf .k-knopf { padding: 2px 8px; line-height: 1; }
+.k-schrift label { margin-bottom: 8px; }
+.k-schrift label:last-child { margin-bottom: 0; }
+
+/* Der Stand steht neben dem Titel — sichtbar auf jedem Reiter, denn die Frage „habe ich
+   ueberhaupt die neue Fassung?" stellt sich ueberall, nicht nur in der Konfiguration. */
+.k-stand { opacity: .5; font-size: 11px; font-weight: 400;
+           font-family: ui-monospace, monospace; margin-left: 4px; }
+
+/* --- Symbol-Editor ------------------------------------------------------ */
+.s-raster2 { display: grid; grid-template-columns: 300px minmax(340px, 1fr);
+             gap: 14px; align-items: start; }
+@media (max-width: 900px) { .s-raster2 { grid-template-columns: 1fr; } }
+
+.s-raster { display: grid; gap: 1px; background: #2a3138; border: 1px solid #2a3138;
+            border-radius: 4px; margin: 12px 0; }
+.s-zelle { background: #0d1013; cursor: crosshair; }
+/* Alpha 0 als Schachbrett — sonst sieht durchsichtig aus wie schwarz, und genau das
+   sind die zwei Zustaende, die man auseinanderhalten muss. */
+.s-leer { background:
+  repeating-conic-gradient(#2b3138 0% 25%, #1a1f24 0% 50%) 50% / 10px 10px !important; }
+
+.s-mitte { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.s-vorschau { margin-top: 12px; }
+.s-vorschau canvas { display: block; image-rendering: pixelated; background: #000;
+                     border: 1px solid #2a3138; border-radius: 4px; margin-top: 4px; }
+
+.s-farbwahl { margin-top: 6px; }
+.s-palette { display: grid; grid-template-columns: repeat(10, 26px); gap: 4px;
+             margin-bottom: 9px; }
+.s-farbe { height: 26px; border-radius: 5px; cursor: pointer;
+           border: 1px solid #333b43; }
+.s-farbe:hover { border-color: #7ab8ff; }
+.s-farbe.aktiv { box-shadow: 0 0 0 2px #7ab8ff; }
+.s-hex { width: 90px; background: #22282e; color: #e6e8ea; border: 1px solid #333b43;
+         border-radius: 6px; padding: 5px 8px; font-family: ui-monospace, monospace; }
+#s-flaeche input[type=range] { width: 220px; display: block; margin-top: 4px; }
+#s-flaeche input[type=text]:not(.s-hex) { background: #22282e; color: #e6e8ea;
+    border: 1px solid #333b43; border-radius: 6px; padding: 5px 8px; min-width: 190px; }
+#s-flaeche input[type=color] { width: 34px; height: 30px; padding: 0;
+    border: 1px solid #333b43; border-radius: 6px; background: #22282e; }

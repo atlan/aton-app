@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aton</title>
+<link rel="icon" href="static/icon.png">
+<link rel="stylesheet" href="static/konfigurator.css">
+<style>
+  :root { color-scheme: dark light; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px;
+         background: #111418; color: #e6e8ea; }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600;
+       display: flex; align-items: center; gap: 10px; }
+  /* Das Logo ist ein Ausschnitt einer LED-Matrix — auf kleiner Flaeche pixelig
+     gerendert, sonst verwaschen die Punkte zu Brei. */
+  .k-logo { width: 26px; height: 26px; border-radius: 6px; image-rendering: auto; }
+  .quelle { color: #8b949e; font-size: 12px; margin-bottom: 14px; }
+  /* Die Beschreibung liess sich nicht lesen. Auffaellig, aber nicht schreiend: es ist
+     kein Absturz, die Oberflaeche funktioniert — nur gezeichnet wird nichts. */
+  /* Im Browser laeuft eine aeltere Fassung als die, die der Server ausliefert.
+     Kein Fehler — deshalb freundlich, aber ueber allem, weil sonst jede Beobachtung
+     auf dieser Seite unter Vorbehalt steht. */
+  #veraltet { background: #2b2a16; border: 1px solid #8a7d2a; border-radius: 6px;
+              padding: 10px 14px; margin-bottom: 14px; display: flex; gap: 12px;
+              align-items: center; }
+  /* ⚠⚠ MUSS nach der Regel oben stehen: ein eigenes `display` ueberstimmt das
+     `hidden`-Attribut (das ist nur ein `display:none` aus dem Browser-Standard und
+     verliert gegen jede eigene Regel). Ohne diese Zeile stand der Kasten von der ersten
+     Sekunde an da — mit leerem Text, weil die Bedingung nie zutraf. Genau so am Geraet
+     gemeldet: „nur der Neu-laden-Knopf", und jedes Neuladen blieb folgerichtig ohne
+     Wirkung, weil es nichts zu beheben gab. */
+  #veraltet[hidden] { display: none; }
+  #veraltet button { background: #8a7d2a; color: #fff; border: 0; border-radius: 5px;
+                     padding: 6px 12px; cursor: pointer; }
+  #ladefehler { background: #3d1d1d; border: 1px solid #a33; border-radius: 6px;
+                padding: 12px 14px; margin-bottom: 14px; line-height: 1.5; }
+  #ladefehler b { color: #ff8a8a; }
+  #ladefehler code { background: #00000040; padding: 1px 4px; border-radius: 3px; }
+  /* Mehrere Anzeigen nebeneinander, sobald genug Platz da ist — bei einer 128x64 neben
+     einer hochkanten 64x128 waere Untereinander viel Scrollen fuer wenig Inhalt.
+     `auto-fit` mit `minmax` faellt auf schmalen Schirmen (Handy, HA-App) von selbst
+     wieder auf eine Spalte zurueck, ohne Medienabfrage.
+
+     ⚠ Die 560 px sind gerechnet, nicht geraten: die Vorschau kommt mit `zoom=6`, eine
+     128er Matrix ist damit 768 px breit und wird per `max-width: 100%` kleingerechnet.
+     Bei kleineren Spalten wuerde die Pixelgrafik sichtbar weich. Mit 560 ergeben sich auf
+     einem ueblichen Schirm (~1500 px) zwei Spalten zu ~730 px — die Vorschau bleibt fast
+     unskaliert. */
+  #panels { display: grid; gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); }
+  /* `align-self: start` verhindert, dass eine niedrige Karte auf die Hoehe ihrer
+     hohen Nachbarin gestreckt wird — sonst steht unter der 128x64 eine leere Flaeche. */
+  .panel { background: #1a1f24; border: 1px solid #2a3138; border-radius: 10px;
+           padding: 16px; align-self: start; }
+  .kopf { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .kopf h2 { font-size: 16px; margin: 0; }
+  .host { color: #8b949e; font-size: 12px; font-family: ui-monospace, monospace; }
+  .marke { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .an { background: #17351f; color: #56d364; }
+  .aus { background: #3a2225; color: #f85149; }
+  .bild { margin: 14px 0; overflow-x: auto; }
+  /* ⚠ `box-sizing` ist hier nicht Kosmetik: mit der Vorgabe `content-box` zaehlt der
+     1-px-Rahmen ZUSAETZLICH zu `max-width: 100%`. Das Bild war damit 2 px breiter als
+     sein Behaelter und erzeugte einen waagerechten Scrollbalken unter jeder Anzeige. */
+  .bild img { display: block; image-rendering: pixelated; border: 1px solid #2a3138;
+              border-radius: 4px; max-width: 100%; box-sizing: border-box; }
+  .zeile { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .bedienung { margin-bottom: 10px; }
+  .schalter { min-width: 110px; }
+  input[type=range] { width: 160px; accent-color: #7ab8ff; }
+  .briwert { min-width: 2.5em; }
+  .gruppe { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  select, button { background: #22282e; color: #e6e8ea; border: 1px solid #333b43;
+                   border-radius: 6px; padding: 5px 10px; font-size: 13px; }
+  button { cursor: pointer; }
+  button:hover { border-color: #4a5560; }
+  .werte { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+           gap: 8px; margin-top: 14px; font-size: 12px; }
+  .wert b { display: block; color: #8b949e; font-weight: 500; font-size: 11px; }
+  .fehler { margin-top: 12px; padding: 10px; border-radius: 6px; background: #2b1d1f;
+            color: #ff9d9d; font-size: 12px; font-family: ui-monospace, monospace;
+            white-space: pre-wrap; }
+  section[hidden] { display: none; }
+</style>
+</head>
+<body>
+<h1><img src="static/icon.png" alt="" class="k-logo">Aton<span id="stand" class="k-stand"></span></h1>
+<div id="veraltet" hidden data-stand="{{STAND}}">
+  <span id="veraltet-text"></span>
+  <button id="veraltet-neu" data-i18n="ui.neu_laden">Neu laden</button>
+</div>
+
+<div class="k-reiter">
+  <button id="tab-betrieb" class="aktiv" data-i18n="ui.betrieb">Betrieb</button>
+  <button id="tab-konfig" data-i18n="ui.konfiguration">Konfiguration</button>
+  <button id="tab-symbole" data-i18n="ui.symbole">Symbole</button>
+</div>
+
+<!-- ================= Betrieb ================= -->
+<section id="betrieb">
+  <div class="quelle" id="quelle"></div>
+  <div id="ladefehler" hidden></div>
+  <div id="panels"></div>
+</section>
+
+<!-- ================= Konfiguration ================= -->
+<section id="konfiguration" hidden>
+  <div class="k-kopf" id="k-kopf"></div>
+  <div class="k-raster">
+    <div class="k-feld">
+      <h3 id="t-struktur" data-i18n="ui.struktur">Struktur</h3>
+      <div class="k-baum" id="k-baum"></div>
+    </div>
+    <div class="k-feld">
+      <h3 id="t-vorschau" data-i18n="ui.vorschau">Vorschau</h3>
+      <div class="k-buehne" id="k-buehne"></div>
+      <div class="k-hinweis" id="k-hinweis"></div>
+      <div class="k-meldung k-fehler" id="k-vorschau-meldung" style="display:none"></div>
+      <div class="k-meldung" id="k-meldung" style="display:none"></div>
+    </div>
+    <div class="k-feld" id="k-form"></div>
+  </div>
+</section>
+
+<!-- ================= Symbol-Editor ================= -->
+<section id="symbole" hidden>
+  <div class="s-raster2">
+    <div class="k-feld">
+      <h3 id="t-symbolliste" data-i18n="ui.symbole">Symbole</h3>
+      <div id="s-liste"></div>
+    </div>
+    <div class="k-feld">
+      <h3 id="t-symboleditor" data-i18n="ui.zeichnen">Zeichnen</h3>
+      <div id="s-flaeche"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+/* ⚠ Hier steht ABSICHTLICH kein eigenes `const T`: `konfigurator.js` deklariert es
+   global, und zwei `const` desselben Namens im globalen Bereich sind ein Syntaxfehler,
+   der BEIDE Skripte totlegt. Aufgerufen wird T() ohnehin erst in Funktionen, also
+   lange nachdem konfigurator.js geladen ist — und `betriebHolen()` wartet ohnehin auf
+   die Texte. (Dieselbe Falle wie bei `hole` 0.5.13, siehe unten.) */
+/* ⚠⚠ NICHT `window.K` fragen: `K` ist in konfigurator.js ein `const`, und ein `const`
+   auf oberster Ebene legt KEINE Eigenschaft auf `window` an — `window.K` ist immer
+   undefined. Genau daran hingen bis 0.10.3 drei Pruefungen, die deshalb nie zutrafen:
+   die Nachfrage nach ungespeicherten Aenderungen kam nie, und das Zahlformat blieb
+   immer deutsch. `typeof` traegt auch, solange konfigurator.js noch nicht geladen ist. */
+const KDa = () => typeof K !== 'undefined';
+const N = (v) => new Intl.NumberFormat(
+  (KDa() && K.sprache === "en") ? "en-GB" : "de-DE").format(v);
+
+/* --- Reiter --- */
+const REITER = { betrieb: "tab-betrieb", konfiguration: "tab-konfig", symbole: "tab-symbole" };
+Object.entries(REITER).forEach(([abschnitt, knopf]) => {
+  document.getElementById(knopf).onclick = () => reiter(abschnitt);
+});
+function reiter(welcher) {
+  Object.entries(REITER).forEach(([abschnitt, knopf]) => {
+    document.getElementById(abschnitt).hidden = abschnitt !== welcher;
+    document.getElementById(knopf).classList.toggle("aktiv", abschnitt === welcher);
+  });
+  if (welcher === "symbole" && typeof symbolEditorZeichnen === "function") {
+    symbolListeZeichnen();
+    symbolEditorZeichnen();
+  }
+  // ⚠ Die Kachelrahmen der Vorschau haengen an der TATSAECHLICHEN Bildbreite, und die
+  // ist 0, solange der Reiter versteckt war. Also erst jetzt setzen — sonst laegen sie
+  // beim ersten Blick auf die Konfiguration alle in der Ecke.
+  // ⚠ Erst hier ist die Spalte messbar (vorher `section[hidden]`, Breite 0). Deshalb
+  // wird der Zoom JETZT an sie angepasst — und nur die Rahmen neu gesetzt, wenn er passt.
+  if (welcher === "konfiguration" && KDa() && K.vorschauAnpassen) K.vorschauAnpassen();
+  // ⚠ Die Vorschau ist ein eingebettetes Bild — da ist nichts zwischengespeichert, sie
+  // wurde nur nie neu geholt. Wer im Editor ein Symbol aendert und zurueckwechselt, sah
+  // deshalb weiter das Bild von vorhin. Beim Wechsel hierher also neu rendern lassen.
+  if (welcher === "konfiguration" && typeof vorschauHolen === "function") vorschauHolen();
+}
+
+/* Vorschaubild austauschen, OHNE dass es zwischendurch verschwindet.
+ *
+ * ⚠ Ein simples `img.src = neu` wirft das alte Bild sofort weg und laedt erst danach.
+ * Waehrend des Ladens hat das Element keine Groesse mehr, die Karte faellt in sich
+ * zusammen und alles darunter springt nach oben — bei jeder Aktualisierung ein Zucken.
+ *
+ * Deshalb zuerst holen, dann tauschen. Ueber einen Blob und nicht ueber ein zweites
+ * <img>, weil die Antwort `Cache-Control: no-store` traegt: ein zweiter Zugriff auf
+ * dieselbe Adresse waere eine zweite Uebertragung, kein Zwischenspeicher-Treffer.
+ *
+ * Scheitert das Holen, bleibt schlicht das alte Bild stehen — besser als eine Luecke.
+ */
+async function vorschauTauschen(img, url) {
+  try {
+    const antwort = await fetch(url);
+    if (!antwort.ok) return;
+    const alt = img.src;
+    img.src = URL.createObjectURL(await antwort.blob());
+    // Der vorige Blob haelt sonst Speicher bis zum Neuladen der Seite — bei einer
+    // Aktualisierung alle paar Sekunden summiert sich das ueber Stunden.
+    if (alt.startsWith("blob:")) URL.revokeObjectURL(alt);
+  } catch (e) { /* Netz weg: altes Bild behalten */ }
+}
+
+/* Solange hier eine Zeit in der Zukunft steht, wird NICHT aktualisiert.
+ *
+ * ⚠ Es reicht nicht, nur den Wert im Schieber zu schuetzen. Die Aktualisierung holt fuer
+ * JEDE Anzeige ein neues Vorschaubild und baut die Karte um — das ruckt, und zwar genau
+ * unter dem Finger, der gerade zieht. Waehrend der Bedienung also gar nichts anfassen.
+ *
+ * Drei Sekunden Pause sind unkritisch: die Anzeige zeichnet ohnehin nur alle paar
+ * Sekunden ein Bild, und was auf der Matrix steht, aendert sich davon nicht.
+ */
+let bedienBis = 0;
+const bedient = (ms = 4000) => { bedienBis = Date.now() + ms; };
+
+/* ⚠ `bedient()` haelt den Takt nur waehrend der Bedienung an. Das genuegt, solange der
+ * Server den neuen Wert sofort zurueckmeldet — die Bestaetigung kann aber laenger
+ * brauchen (erst Home Assistant, dann das Geraet). Traf die Antwort nach Ablauf der
+ * Schonfrist ein, schrieb die Aktualisierung den ALTEN Stand zurueck: das Feld sprang
+ * zurueck, und es sah aus, als haette der Klick nicht gegriffen — woraufhin man noch
+ * einmal klickt und gegen den eigenen vorherigen Befehl arbeitet.
+ *
+ * Deshalb wird der GEWUENSCHTE Wert gemerkt und verteidigt, bis der Server genau ihn
+ * meldet. Die Frist ist die Notbremse: ein abgelehnter oder verlorener Befehl darf die
+ * Anzeige nicht fuer immer auf einem Wunsch stehen lassen, den es nicht gibt.
+ */
+const WUNSCH_FRIST = 15000;
+const wunschSetzen = (el, wert) => {
+  if (!el) return;
+  el.dataset.wunsch = String(wert);
+  el.dataset.wunschBis = String(Date.now() + WUNSCH_FRIST);
+};
+/* ★★ Der eigentliche Grund, warum sich die Betriebsansicht „die Steuerung aus der Hand
+ * nehmen" anfuehlte: alle drei Sekunden wurden die Server-Werte in JEDES Bedienelement
+ * zurueckgeschrieben — auch dann, wenn sich gar nichts geaendert hatte. Wer im falschen
+ * Moment tippte, schrieb gegen diesen Takt an.
+ *
+ * `uebernehmen()` schreibt nur noch, wenn der Server einen ANDEREN Wert meldet als beim
+ * letzten Abruf. Im Normalfall (nichts hat sich geaendert) wird das Element gar nicht
+ * mehr angefasst; nur das Bild und die Lesewerte laufen weiter. Aendert jemand die
+ * Stellung woanders — in Home Assistant, am zweiten Browser —, kommt das trotzdem an,
+ * denn dann ist der Wert ja neu.
+ */
+function uebernehmen(el, wert, setzen) {
+  if (!el) return;
+  const neu = String(wert);
+  const geaendert = el.dataset.serverwert !== neu;
+  el.dataset.serverwert = neu;
+  if (!geaendert) return;                       // Ruhe bewahren, nichts anfassen
+  if (document.activeElement === el) return;    // waehrend der Bedienung erst recht nicht
+  if (wunschHaelt(el, wert)) return;            // eigener Befehl noch unbestaetigt
+  setzen(wert);
+}
+
+/* true = der Wert vom Server darf JETZT NICHT geschrieben werden.
+   ⚠ Raeumt den Wunsch mit ab — pro Durchlauf nur EINMAL aufrufen. */
+function wunschHaelt(el, serverwert) {
+  if (!el || el.dataset.wunsch === undefined) return false;
+  const offen = Number(el.dataset.wunschBis || 0) > Date.now();
+  if (String(serverwert) === el.dataset.wunsch || !offen) {
+    delete el.dataset.wunsch;
+    delete el.dataset.wunschBis;
+    return false;
+  }
+  return true;
+}
+
+/* --- Betriebsansicht --- */
+/* ⚠⚠ HIESS BIS 0.5.13 `hole` — und kollidierte damit mit `hole(pfad)` aus
+ * `konfigurator.js`, das im selben globalen Raum liegt und SPAETER geladen wird.
+ * Lange folgenlos, weil `setInterval(hole, 3000)` die Referenz sofort festhielt.
+ * Mit `setInterval(() => hole(), 3000)` wird der Name aber bei JEDEM Aufruf neu
+ * nachgeschlagen — und trifft dann den Pfad-Helfer des Konfigurators:
+ *     TypeError: pfad is not iterable
+ * Die Betriebsansicht fror ein, die Konsole lief voll. Ein eindeutiger Name ist die
+ * Reparatur; sich auf die Reihenfolge des Ladens zu verlassen war nie eine.
+ */
+async function betriebHolen(erzwingen = false) {
+  if (document.getElementById("betrieb").hidden) return;
+  // ⚠ Die Beschriftungen kommen aus derselben Quelle wie die des Konfigurators, und die
+  // laedt `konfigurator.js` NACH dieser Datei. Vor dem ersten Zeichnen darauf warten,
+  // sonst blitzen die Schluesselnamen auf. `statischeTexte()` stoesst danach an.
+  if (!KDa() || !K.texte || !Object.keys(K.texte).length) return;
+  if (!erzwingen && Date.now() < bedienBis) return;
+  // ⚠ Ohne dieses Auffangen reisst ein einzelner fehlgeschlagener Abruf die Kette ab —
+  // und genau das passiert bei jeder Aktualisierung der App, wenn sie kurz neu startet.
+  // Fuer den Zeitgeber waere das folgenlos, fuer die Nachfass-Schleife des Schalters
+  // nicht: die bricht dann ab und laesst den Knopf FUER IMMER gesperrt zurueck.
+  let d;
+  try {
+    const r = await fetch("api/panels");
+    if (!r.ok) return;
+    d = await r.json();
+  } catch (e) {
+    return;    // naechster Takt in drei Sekunden versucht es wieder
+  }
+  // ⚠ Vergleich gegen den Stand, mit dem DIESE Seite geladen wurde (K.stand, kommt aus
+  // /api/schema beim Laden). Weicht der Server ab, ist alles, was man hier sieht,
+  // moeglicherweise die Ausgabe von altem JavaScript — das war schon zweimal die
+  // Ursache einer langen Suche.
+  document.getElementById("quelle").textContent = T("ui.beschreibung") + ": " + d.quelle;
+
+  // Beschreibung fehlerhaft: dann ist die Liste unten leer, und zwar mit Grund.
+  const kasten = document.getElementById("ladefehler");
+  if (d.ladefehler) {
+    // ⚠ Nur der Rahmen kommt aus der Uebersetzung; der Fehlertext selbst wird
+    // ausdruecklich als TEXT gesetzt (unten), niemals als HTML.
+    kasten.innerHTML = "<b>" + T("ui.beschreibung_fehlerhaft") + "</b><br><code></code><br>"
+      + T("ui.beschreibung_fehlerhaft_hilfe");
+    kasten.querySelector("code").textContent = d.ladefehler;   // kein HTML aus Fehlertext
+    kasten.hidden = false;
+  } else {
+    kasten.hidden = true;
+  }
+
+  const ziel = document.getElementById("panels");
+
+  // ⚠ Karten werden ueber `p-<kennung>` wiedererkannt und nur ANGELEGT, nie entfernt.
+  // Wer die Kennung einer Anzeige aendert oder eine Anzeige loescht, bekam deshalb die
+  // alte Karte weiter zu sehen — sie wurde nur nicht mehr aktualisiert und zeigte
+  // eingefrorene Werte. Eine Anzeige, die es nicht mehr gibt, muss weg.
+  const bekannt = new Set(d.panels.map(p => "p-" + p.id));
+  [...ziel.children].forEach(k => { if (!bekannt.has(k.id)) k.remove(); });
+
+  d.panels.forEach(p => {
+    let el = document.getElementById("p-" + p.id);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "panel";
+      el.id = "p-" + p.id;
+      el.innerHTML = `
+        <div class="kopf">
+          <h2></h2><span class="host"></span><span class="marke"></span><span class="marke net"></span><span class="marke probe" hidden data-i18n="ui.probelauf">Probelauf – sendet nicht</span>
+        </div>
+        <div class="bild"><img alt="Vorschau"></div>
+        <div class="zeile bedienung"></div>
+        <div class="zeile gruppen"></div>
+        <div class="werte"></div>
+        <div class="fehler" hidden></div>`;
+    }
+    // Immer anhaengen, nicht nur beim Anlegen: `appendChild` VERSCHIEBT einen schon
+    // vorhandenen Knoten. So folgt die Reihenfolge der Karten der Beschreibungsdatei,
+    // auch wenn dort umsortiert wurde. Der Knoten selbst bleibt derselbe, Bedienung und
+    // Wahlfelder behalten also ihren Zustand.
+    ziel.appendChild(el);
+    el.querySelector("h2").textContent = p.name;
+    el.querySelector(".host").textContent = `${p.host} · ${p.size[0]}×${p.size[1]}`;
+    const tor = el.querySelector(".marke");
+    tor.textContent = T(p.an ? "ui.anzeige_an" : "ui.anzeige_aus");
+    tor.className = "marke " + (p.an ? "an" : "aus");
+    const probe = el.querySelector(".marke.probe");
+    probe.hidden = !p.probelauf;
+    probe.className = "marke probe aus";
+    const netz = el.querySelector(".marke.net");
+    // Bei ausgeschalteter Anzeige sagt „nicht erreichbar" nichts aus, was „Anzeige aus"
+    // nicht schon sagt — und liest sich wie eine Stoerung. Also weglassen.
+    netz.hidden = p.probelauf || !p.an;
+    netz.textContent = T(p.erreichbar ? "ui.erreichbar" : "ui.nicht_erreichbar");
+    netz.className = "marke net " + (p.erreichbar ? "an" : "aus");
+
+    vorschauTauschen(el.querySelector("img"),
+                     `api/panel/${p.id}/preview.png?zoom=6&raster=1&t=${Date.now()}`);
+
+    // ── An/Aus + Helligkeit ──────────────────────────────────────────────
+    // ⚠ Schalter und Regler werden GETRENNT aufgebaut, jeder mit eigenem Merker.
+    // Vorher steckten beide in einem `if (… && p.schaltbar)` — eine Anzeige ohne
+    // `gate:`-Block hatte damit auch keinen Helligkeitsregler, obwohl die Helligkeit mit
+    // dem Tor nichts zu tun hat. Getrennte Merker heisst ausserdem: taucht das Tor spaeter
+    // auf (Geraet war stromlos), kommt der Schalter nachtraeglich dazu.
+    // ⚠⚠ Der aktuelle Stand wird AM ELEMENT hinterlegt, nicht im Abschluss der
+    // Ereignisbehandlung festgehalten. Die Behandlung entsteht einmal beim Aufbau und
+    // haelt `p` von genau diesem Durchlauf fest; spaetere Aktualisierungen erzeugen ein
+    // NEUES `p`. Die Beschriftung wechselte deshalb brav, der Klick schickte aber ewig
+    // die Richtung vom ersten Zeichnen — im Protokoll dreimal `turn_off` und kein
+    // einziges `turn_on`. Aufgefallen ist es erst an der zweiten Matrix: die erste
+    // schaltet ueber ein Skript, und ein Skript kennt keine Richtung.
+    el._stand = p;
+
+    const b = el.querySelector(".bedienung");
+    if (b.dataset.schalter !== "1" && p.schaltbar) {
+      b.dataset.schalter = "1";
+      const schalter = document.createElement("button");
+      schalter.className = "schalter";
+      schalter.onclick = async () => {
+        const jetzt = el._stand;
+        const ziel = !jetzt.an;
+        schalter.disabled = true;
+        let d = {};
+        try {
+          const r = await fetch(`api/panel/${jetzt.id}/schalten`, {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({an: ziel})
+          });
+          d = await r.json();
+        } catch (e) {
+          // ⚠ Geht der Aufruf schief, MUSS der Knopf trotzdem wieder freigegeben werden.
+          // Sonst steht er fuer immer gesperrt da und die Anzeige laesst sich nur noch
+          // nach einem Neuladen der Seite bedienen.
+          schalter.disabled = false;
+          schalter.title = T("ui.aufruf_gescheitert");
+          return;
+        }
+        schalter.title = d.was || "";
+        // ⚠ Nicht stur eine feste Zeit warten. Der Knopf muss gesperrt bleiben, solange
+        // ein Schaltskript laeuft — sonst startet ein zweiter Klick es ein zweites Mal.
+        // Ein DIREKT geschaltetes Tor meldet den neuen Zustand aber in Sekundenbruch-
+        // teilen, und drei Sekunden Starre fuehlen sich dabei kaputt an. Also kurz
+        // nachfassen und freigeben, sobald der Zustand wirklich umgesprungen ist.
+        const grenze = Date.now() + (d.skript ? 45000 : 6000);
+        const nachfassen = async () => {
+          await betriebHolen(true);
+          if (el._stand.an === ziel || Date.now() > grenze) { schalter.disabled = false; }
+          else setTimeout(nachfassen, 400);
+        };
+        setTimeout(nachfassen, 250);
+      };
+      // `prepend` statt `appendChild`: der Schalter gehoert vor den Regler. Kommt er
+      // nachtraeglich dazu — weil das Tor beim ersten Zeichnen noch nicht da war —, waere
+      // er sonst dahinter gelandet und die Karten saehen unterschiedlich aus.
+      b.prepend(schalter);
+    }
+
+    if (b.dataset.regler !== "1") {
+      b.dataset.regler = "1";
+      const w = document.createElement("div");
+      w.className = "gruppe";
+      w.innerHTML = "<span></span>";
+      w.firstChild.textContent = T("ui.helligkeit");
+      const s = document.createElement("input");
+      s.type = "range"; s.min = 1; s.max = 255; s.className = "bri";
+      const z = document.createElement("span");
+      z.className = "host briwert";
+      // `change` statt `input`: waehrend des Ziehens wuerde jeder Zwischenwert einen
+      // Aufruf ausloesen und die Matrix flackern.
+      // `pointerdown` deckt Maus, Finger und Stift ab — ab dem Aufsetzen ist Ruhe,
+      // nicht erst ab der ersten Wertaenderung.
+      s.onpointerdown = () => { bedient(); s.dataset.beruehrt = Date.now(); };
+      s.oninput = () => { z.textContent = s.value; bedient(); s.dataset.beruehrt = Date.now(); };
+      s.onchange = () => {
+        bedient();
+        s.dataset.beruehrt = Date.now();
+        fetch(`api/panel/${el._stand.id}/helligkeit`, {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({wert: parseInt(s.value, 10)})
+        });
+      };
+      w.appendChild(s); w.appendChild(z);
+      b.appendChild(w);
+    }
+
+    // „Vollbild senden" gehoert in dieselbe Zeile wie Schalter und Regler — es gilt fuer
+    // JEDE Anzeige, unabhaengig davon, ob ein Tor eingetragen ist. Bisher gab es den Weg
+    // nur ueber die Entitaet in Home Assistant.
+    if (b.dataset.vollbild !== "1") {
+      b.dataset.vollbild = "1";
+      const v = document.createElement("button");
+      v.className = "vollbild";
+      v.textContent = T("ui.vollbild_senden");
+      v.title = T("ui.vollbild_hilfe");
+      v.onclick = async () => {
+        v.disabled = true;
+        await fetch(`api/panel/${el._stand.id}/vollbild`, {method: "POST"});
+        // Kurz sperren: das Vollbild geht mit dem naechsten Takt raus, ein zweiter Klick
+        // in der Zwischenzeit brächte nichts.
+        setTimeout(() => { v.disabled = false; betriebHolen(true); }, 1500);
+      };
+      b.appendChild(v);
+    }
+
+    if (p.schaltbar) {
+      const schalter = b.querySelector(".schalter");
+      if (schalter && !schalter.disabled) {
+        schalter.textContent = T(p.an ? "ui.ausschalten" : "ui.einschalten");
+        schalter.title = T("ui.ueber") + " " + p.schaltweg;
+      }
+    }
+    {
+      // ⚠ Alle drei Sekunden holt `betriebHolen()` die Werte neu und schreibt sie zurueck. Wer
+      // in dem Moment am Regler zieht, bekam ihn unter der Hand auf den alten Wert
+      // gerissen. `document.activeElement` allein reicht nicht: bei Bedienung mit dem
+      // Finger oder nach einem Klick daneben hat der Regler den Fokus nicht mehr,
+      // waehrend der neue Wert noch unterwegs ist. Deshalb zusaetzlich eine Schonfrist
+      // ab der letzten Beruehrung.
+      const s = b.querySelector(".bri");
+      const z = b.querySelector(".briwert");
+      const frisch = Number(s && s.dataset.beruehrt || 0) > Date.now() - 4000;
+      if (!frisch) uebernehmen(s, p.helligkeit, (v) => {
+        s.value = v;
+        if (z) z.textContent = v;
+      });
+    }
+
+    const g = el.querySelector(".gruppen");
+    if (g.dataset.aufgebaut !== "1") {
+      g.dataset.aufgebaut = "1";
+      p.gruppen.forEach(gr => {
+        const w = document.createElement("div");
+        w.className = "gruppe";
+        const sel = document.createElement("select");
+        sel.add(new Option(T("ui.automatik"), "Automatik"));
+        gr.screens.forEach(o => sel.add(new Option(o, o)));
+        // ⚠ Diese drei Zeilen fehlten bis 0.10.1 — der Regler daneben hatte sie laengst.
+        // Ohne sie lief der 3-s-Takt waehrend des Aufklappens weiter und schrieb die
+        // alte Stellung zurueck, teils mitten in die offene Liste hinein.
+        sel.onpointerdown = () => bedient();
+        sel.onfocus = () => bedient();
+        sel.onchange = () => {
+          bedient();
+          wunschSetzen(sel, sel.value);
+          fetch(`api/panel/${p.id}/screen`, {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({gruppe: gr.id, wert: sel.value})
+          }).then(() => betriebHolen(true));
+        };
+        w.innerHTML = `<span>${gr.name}</span>`;
+        w.appendChild(sel);
+        const jetzt = document.createElement("span");
+        jetzt.className = "host aktiv";
+        w.appendChild(jetzt);
+        g.appendChild(w);
+      });
+      // ⚠ Hier stand bis 0.5.10 ein zweiter „Vollbild senden"-Knopf. Er gehoert zu den
+      // Bedienelementen ueber den Screen-Waehlern, nicht zwischen sie — dort steht er
+      // jetzt. (Er hiess ausserdem `b` und verdeckte damit die Bedienzeile `b` von
+      // weiter oben; ein Fehler, der beim naechsten Griff darauf teuer geworden waere.)
+    }
+    p.gruppen.forEach((gr, i) => {
+      const w = g.children[i];
+      if (!w) return;
+      const sel = w.querySelector("select");
+      uebernehmen(sel, gr.vorwahl, (v) => { sel.value = v; });
+      // Nur-Lesen: „zeigt: …" darf jederzeit nachziehen, da klickt niemand hinein.
+      w.querySelector(".aktiv").textContent = gr.aktiv ? T("ui.zeigt") + " " + gr.aktiv : "";
+    });
+
+    el.querySelector(".werte").innerHTML = `
+      <div class="wert"><b>${T("ui.bilder")}</b>${N(p.frames)}</div>
+      <div class="wert"><b>${T("ui.geaenderte_pixel")}</b>${N(p.pixel)}</div>
+      <div class="wert"><b>${T("ui.bytes_je_bild")}</b>${N(p.bytes)}</div>
+      <div class="wert"><b>${T("ui.helligkeit")}</b>${p.helligkeit}</div>
+      <div class="wert"><b>${T("ui.sendefehler")}</b>${N(p.fehler)}</div>`;
+
+    const f = el.querySelector(".fehler");
+    const texte = [...(p.render_fehler || [])];
+    if (p.letzter_fehler) texte.unshift("WLED: " + p.letzter_fehler);
+    f.hidden = texte.length === 0;
+    f.textContent = texte.join("\n");
+  });
+}
+
+/* Von `statischeTexte()` in konfigurator.js gerufen, sobald die Texte da sind — und
+   erneut bei jedem Sprachwechsel. Die Karten merken sich ihren Aufbau (`aufgebaut`,
+   `vollbild`), damit Bedienelemente ihren Zustand behalten; fuer neue Beschriftungen
+   muss genau dieses Gedaechtnis einmal zurueckgesetzt werden.
+   ⚠ Muss eine Funktions-DEKLARATION auf oberster Ebene sein — nur die legt den Namen
+   auf `window`, und konfigurator.js findet sie sonst nicht. */
+function betriebNeuZeichnen() {
+  document.querySelectorAll(".gruppen, .bedienung").forEach(e => {
+    // ⚠ ALLE Merker abraeumen, nicht einzeln benannte. Es gibt derer vier
+    // (`schalter`, `regler`, `vollbild`, `aufgebaut`), und beim ersten Anlauf hatte ich
+    // zwei davon uebersehen: der Inhalt war geleert, der Merker stand aber noch auf "1"
+    // — Schalter und Regler kamen nie wieder. Generisch abraeumen haelt auch, wenn
+    // spaeter ein fuenfter dazukommt.
+    Object.keys(e.dataset).forEach(k => delete e.dataset[k]);
+    e.innerHTML = "";
+  });
+  betriebHolen(true);
+}
+
+betriebHolen(true);
+// ⚠ Ohne Pfeilfunktion bekaeme `betriebHolen` das Zeitgeber-Argument als `erzwingen`
+// untergeschoben — die Bedienpause waere damit wirkungslos.
+// ⚠ Handler in JS statt als `onclick`-Attribut: der Rest dieser Datei macht es genauso,
+// und ein Inline-Attribut ist unter der Auslieferung durch HAs Ingress der einzige Weg,
+// der still gar nichts tut.
+//
+// ⚠⚠ Und der Konfigurator haengt einen `beforeunload`-Waechter ein, solange es
+// ungespeicherte Aenderungen gibt. In einem eingebetteten Rahmen (Ingress) bricht der
+// Browser die Navigation dann ab, OHNE zu fragen — der Knopf sah aus, als sei er kaputt.
+// Also ausdruecklich nachfragen und den Merker vorher zuruecknehmen.
+document.getElementById("veraltet-neu").onclick = () => {
+  if (KDa() && K.schmutzig
+      && !confirm(T("ui.ungespeichert_neu_laden"))) return;
+  if (KDa()) K.schmutzig = false;
+
+  // ⚠⚠ NICHT `location.reload()`. Diese Seite laeuft unter HAs Ingress in einem
+  // eingebetteten Rahmen, und HAs Frontend hat einen Service Worker: der sitzt VOR dem
+  // Netz und darf dieselbe Adresse aus seinem Zwischenspeicher beantworten. Das
+  // `no-store`, das diese App mitschickt, erreicht ihn dann gar nicht — die Seite lud
+  // sichtbar neu und war trotzdem die alte. Am Geraet genau so erlebt.
+  //
+  // Eine ANDERE Adresse umgeht jeden solchen Zwischenspeicher: Ablagen sind nach der
+  // vollstaendigen Adresse geschluesselt, ein neuer Parameter ist also ein Fehlschlag
+  // im Zwischenspeicher und erzwingt den Gang ins Netz.
+  const u = new URL(location.href);
+  u.searchParams.set("neu", Date.now().toString());
+  location.replace(u.toString());   // `replace`, damit der Zurueck-Knopf nicht vollaeuft
+};
+
+// ⚠⚠ EIGENER Takt, nicht in `betriebHolen`: das bricht ab, sobald der Betriebs-Reiter
+// nicht sichtbar ist (Zeile mit `betrieb.hidden`). Die Warnung erschien damit ausgerechnet
+// im Konfigurator nie — dort, wo eine alte Fassung am meisten anrichtet, und wo der
+// Nutzer die meiste Zeit verbringt. Genau so am Geraet erlebt: „der gelbe Kasten ist nach
+// dem Neuladen verschwunden" hiess in Wahrheit „hier wird gar nicht geprueft".
+async function standPruefen() {
+  const b = document.getElementById("veraltet");
+  const eigener = b.dataset.stand;      // vom Server beim Ausliefern eingesetzt
+  if (!eigener || eigener.includes("{{")) return;
+  let jetzt;
+  try {
+    const r = await fetch("api/stand");
+    if (!r.ok) return;
+    jetzt = (await r.json()).stand;
+  } catch (e) { return; }
+  if (!jetzt || jetzt === eigener) return;
+  document.getElementById("veraltet-text").textContent =
+    T("ui.veraltet").replace("{browser}", eigener).replace("{server}", jetzt);
+  b.hidden = false;
+}
+standPruefen();
+setInterval(standPruefen, 15000);
+
+setInterval(() => betriebHolen(), 3000);
+</script>
+<script src="static/konfigurator.js"></script>
+<script src="static/symboleditor.js"></script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "bestaetigen": {
+        "title": "Aton",
+        "description": "Found the app \"{host}\". Set it up?"
+      },
+      "user": {
+        "title": "Aton",
+        "description": "Address of the app. The defaults fit if it runs as an app on this Home Assistant.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No answer. Is the app running, and are host and port correct?",
+      "unexpected_response": "Something other than the Aton app answered there."
+    },
+    "abort": {
+      "already_configured": "This app is already set up.",
+      "cannot_connect": "No answer from the app.",
+      "unexpected_response": "Something other than the Aton app answered there."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "erreichbar": {
+        "name": "Reachable"
+      },
+      "zeigt_an": {
+        "name": "Displaying"
+      }
+    },
+    "button": {
+      "vollbild": {
+        "name": "Send full frame"
+      }
+    },
+    "number": {
+      "helligkeit": {
+        "name": "Brightness"
+      }
+    },
+    "image": {
+      "vorschau": {
+        "name": "Preview"
+      }
+    },
+    "sensor": {
+      "frames": {
+        "name": "Frames"
+      },
+      "pixel": {
+        "name": "Changed pixels"
+      },
+      "bytes": {
+        "name": "Bytes per frame"
+      },
+      "fehler": {
+        "name": "Send errors"
+      },
+      "letzter_fehler": {
+        "name": "Last error"
+      }
+    }
+  }
+}

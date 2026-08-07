@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+fonts/
+_check_*.pil
+_check_*.pbm

@@ -1,0 +1,28 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "erreichbar": { "default": "mdi:lan-connect", "state": { "off": "mdi:lan-disconnect" } },
+      "zeigt_an": { "default": "mdi:television-shimmer", "state": { "off": "mdi:television-off" } }
+    },
+    "button": {
+      "vollbild": { "default": "mdi:refresh" }
+    },
+    "image": {
+      "vorschau": { "default": "mdi:image-filter-center-focus-weak" }
+    },
+    "number": {
+      "helligkeit": { "default": "mdi:brightness-6" }
+    },
+    "sensor": {
+      "frames": { "default": "mdi:counter" },
+      "pixel": { "default": "mdi:grid" },
+      "bytes": { "default": "mdi:upload" },
+      "fehler": { "default": "mdi:alert-circle-outline" },
+      "letzter_fehler": { "default": "mdi:message-alert-outline" }
+    }
+  },
+  "services": {
+    "notify": { "service": "mdi:message-text" },
+    "notify_clear": { "service": "mdi:message-off" }
+  }
+}

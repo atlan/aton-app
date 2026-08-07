@@ -1,0 +1,32 @@
+name: Aton
+version: "0.11.7"
+slug: aton
+description: >-
+  Renders LED matrix displays (WLED/HUB75) from a YAML description:
+  a base image plus switchable screens, controlled from Home Assistant
+url: https://github.com/atlan/aton-app
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:dots-grid
+panel_title: Aton
+homeassistant_api: true
+hassio_api: true
+# Meldet sich unter diesem Namen beim Supervisor an. Home Assistant benutzt den
+# Dienstnamen direkt als Integrations-Domain und bietet die Begleit-Integration
+# dadurch von selbst zur Einrichtung an.
+discovery:
+  - aton
+map:
+  - homeassistant_config:rw
+options:
+  config_file: aton.yaml
+  log_level: info
+schema:
+  config_file: str
+  log_level: list(trace|debug|info|warning|error)

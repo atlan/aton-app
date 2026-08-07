@@ -1,0 +1,65 @@
+notify:
+  name: Meldung anzeigen
+  description: >-
+    Zeigt eine Meldung in der Benachrichtigungszeile der Matrix an. Kurzer Text
+    erscheint als stehender Balken, langer Text läuft durch.
+  fields:
+    text:
+      name: Text
+      description: Bis 30 Zeichen stehender Balken, darüber Laufschrift.
+      required: true
+      example: "Katzenklo: bitte kümmern"
+      selector:
+        text:
+    level:
+      name: Stufe
+      description: info ist grün, warning ist rot und verdrängt info.
+      default: info
+      selector:
+        select:
+          options:
+            - info
+            - warning
+    duration:
+      name: Dauer
+      description: Sekunden bis die Meldung von selbst verschwindet. 0 lässt sie stehen.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    id:
+      name: Kennung
+      description: Zum gezielten Löschen. Ohne Angabe wird eine vergeben.
+      selector:
+        text:
+    priority:
+      name: Priorität
+      description: Höhere Zahl verdrängt niedrigere.
+      selector:
+        number:
+          min: 1
+          max: 9
+    panel:
+      name: Anzeige
+      description: ID der Anzeige aus der YAML. Ohne Angabe gilt die Meldung für alle.
+      example: wohnzimmer
+      selector:
+        text:
+
+notify_clear:
+  name: Meldung löschen
+  description: Entfernt eine Meldung, ohne Kennung alle.
+  fields:
+    id:
+      name: Kennung
+      description: Leer lassen, um alle Meldungen zu löschen.
+      selector:
+        text:
+    panel:
+      name: Anzeige
+      description: ID der Anzeige. Ohne Angabe gilt es für alle.
+      example: wohnzimmer
+      selector:
+        text:
