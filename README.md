@@ -103,6 +103,12 @@ decision. Rendering and the WLED transport are deliberately left out — there y
 testing your own mocks, and a rendering mistake is visible on the matrix within a second.
 The reasoning is written down in [`tests/conftest.py`](tests/conftest.py).
 
+## License
+
+[MIT](LICENSE) — for everything in this repository **except the artwork**, which keeps
+the licence it came with, see below. Icons and logo are derived work and stay under
+CC BY 2.5; the attribution has to travel with them.
+
 ## Credits
 
 The logo shows **Aten**, the sun disc with rays ending in hands, after
