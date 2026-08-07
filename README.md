@@ -38,6 +38,8 @@ turns that into controls in Home Assistant.
 Repositories**, add the URL of this repository, install "Aton" and start it. The first
 start builds the image, which takes a few minutes.
 
+[![Open your Home Assistant instance and add this add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fatlan%2Faton-app)
+
 **2. Description** — put `aton.yaml` next to `configuration.yaml`; copy
 [`examples/aton.yaml`](examples/aton.yaml) as a starting point.
 
@@ -45,6 +47,8 @@ start builds the image, which takes a few minutes.
 *custom repository* of type *Integration*, download "Aton", restart HA. The app then
 announces itself: the integration shows up under **Settings → Devices & services** as
 discovered, one click is enough. Host and port come with it.
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=atlan&repository=aton-app&category=integration)
 
 ## What the app brings
 
