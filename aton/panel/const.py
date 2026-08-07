@@ -39,6 +39,26 @@ def anzeige_pfad(pfad: str) -> str:
     return pfad
 
 
+def version() -> str:
+    """Version der App aus `config.yaml`, oder `"?"` wenn sie nicht lesbar ist.
+
+    ⚠ Die EINZIGE Quelle. In `panel/__init__.py` stand frueher ein zweites
+    `__version__ = "0.1.0"`, das niemand mitzog — nur die `config.yaml` liest auch
+    der Supervisor, alles andere laeuft irgendwann auseinander.
+
+    Von Hand geparst statt ueber einen YAML-Leser: die Funktion wird auch dort
+    gerufen, wo noch nichts geladen ist.
+    """
+    try:
+        with open(os.path.join(APP_DIR, "config.yaml"), encoding="utf-8") as fh:
+            for zeile in fh:
+                if zeile.startswith("version:"):
+                    return zeile.split(":", 1)[1].strip().strip('"\'')
+    except OSError:
+        pass
+    return "?"
+
+
 # --- Netz ------------------------------------------------------------------
 INGRESS_PORT = 8099
 

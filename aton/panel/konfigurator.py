@@ -19,7 +19,7 @@ from PIL import Image
 
 from . import configfile, schema
 from .config import ConfigError, pruefe
-from .const import UNAVAILABLE_STATES, WWW_DIR, anzeige_pfad
+from .const import UNAVAILABLE_STATES, WWW_DIR, anzeige_pfad, version
 from .fonts import SCHRIFT_VORGABEN
 from .render import Renderer, vergroessern
 
@@ -310,16 +310,6 @@ def _stand() -> str:
     schreibt die Oberflaeche hin, welchen Stand sie SELBST hat. Passt er nicht zum
     erwarteten, ist die Sache in einer Sekunde geklaert statt in zwanzig Minuten.
     """
-    version = "?"
-    pfad = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
-    try:
-        with open(pfad, encoding="utf-8") as fh:
-            for zeile in fh:
-                if zeile.startswith("version:"):
-                    version = zeile.split(":", 1)[1].strip().strip('"\'')
-                    break
-    except OSError:
-        pass
     # ⚠ Ueber ALLE Oberflaechendateien, nicht nur ueber `konfigurator.js`. Genau daran
     # ist der Stempel schon einmal gescheitert: eine Aenderung an `symboleditor.js` liess
     # ihn unveraendert — das Werkzeug zeigte also gerade das nicht an, wofuer es da ist.
@@ -327,7 +317,7 @@ def _stand() -> str:
     for datei in sorted(os.listdir(WWW_DIR)) if os.path.isdir(WWW_DIR) else []:
         if datei.endswith((".js", ".css", ".html")):
             marke = max(marke, int(os.path.getmtime(os.path.join(WWW_DIR, datei))))
-    return f"{version}\u00b7{marke}"
+    return f"{version()}\u00b7{marke}"
 
 
 def _kacheln(cfg, panel, pi: int, aktiv: dict, seiten: dict | None = None) -> list[dict]:

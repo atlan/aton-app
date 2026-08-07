@@ -40,8 +40,13 @@ class MatrixPanelEntity(CoordinatorEntity[MatrixPanelCoordinator]):
         return DeviceInfo(
             identifiers={(DOMAIN, self._panel_id)},
             name=p.get("name") or self._panel_id,
-            manufacturer="Aton",
-            model=f"{größe[0]}x{größe[1]}",
+            # Die Gegenstelle, an die wir senden — nicht wir selbst. „Aton" stand hier
+            # frueher und doppelte sich mit der Zeile darunter, die HA ohnehin fuer die
+            # Integration setzt: es sah aus, als sei Aton auch der Geraetehersteller.
+            manufacturer="WLED",
+            # Nicht die nackte Zahl: HA zeigt `model` als erste Zeile der Geraetekarte,
+            # und „128x64" allein liest sich dort nicht als Angabe, sondern als Rest.
+            model=f"LED matrix {größe[0]}×{größe[1]}",
             configuration_url=self.coordinator.api.basis,
-            sw_version=None,
+            sw_version=self.coordinator.version,
         )

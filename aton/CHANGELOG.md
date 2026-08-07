@@ -1,5 +1,22 @@
 # Änderungen
 
+## 0.11.8 — die App sagt jetzt, welchen Stand sie hat
+
+`/api/panels` liefert zusätzlich `version`. Die Begleit-Integration trägt sie als
+`sw_version` ins Gerät ein — damit steht auf der Gerätekarte, welcher Stand der App
+die Anzeige gerade bedient, statt gar nichts.
+
+⚠ **Es gab zwei Versionsangaben.** In `panel/__init__.py` stand seit jeher
+`__version__ = "0.1.0"`, während die App bei 0.11.7 war. Niemand las sie, deshalb ist
+sie nie aufgefallen — genau so überlebt eine Dublette. Es gibt jetzt nur noch
+`const.version()`, das die `config.yaml` liest, also die Datei, die auch der
+Supervisor liest. Drei Tests halten das fest, einer davon prüft ausdrücklich, dass
+`panel.__version__` **nicht** zurückkommt.
+
+Nebenbei die Gerätekarte begradigt: `model` heißt jetzt `LED matrix 128×64` statt
+`128x64`, und als Hersteller steht **WLED** dort, die Gegenstelle — vorher stand da
+„Aton" und doppelte sich mit der Zeile, die HA ohnehin für die Integration setzt.
+
 ## 0.11.7 — der Zoom folgt jetzt der Spaltenbreite
 
 0.11.6 hat die Rahmen an das verkleinerte Bild angepasst — richtig, aber die

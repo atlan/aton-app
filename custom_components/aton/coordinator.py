@@ -28,6 +28,7 @@ class MatrixPanelCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         self.api = api
         self.quelle: str = "?"
+        self.version: str | None = None
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -36,4 +37,7 @@ class MatrixPanelCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise UpdateFailed(str(err)) from err
 
         self.quelle = roh.get("quelle", "?")
+        # None statt "?", wenn die App aelter ist als dieses Feld: HA laesst die Zeile
+        # dann weg, statt ein Fragezeichen als Version anzuzeigen.
+        self.version = roh.get("version") or None
         return {p["id"]: p for p in roh.get("panels", [])}

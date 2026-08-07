@@ -16,7 +16,7 @@ import os
 
 from aiohttp import web
 
-from .const import INGRESS_PORT, WWW_DIR, anzeige_pfad
+from .const import INGRESS_PORT, WWW_DIR, anzeige_pfad, version
 from .konfigurator import KonfiguratorAPI, _stand
 from .render import vergroessern
 
@@ -154,6 +154,10 @@ class WebUI:
             })
         return web.json_response({"panels": daten,
                                   "quelle": anzeige_pfad(self.app_state.cfg.quelle),
+                                  # Die Begleit-Integration traegt das als `sw_version`
+                                  # ins Geraet ein — so steht auf der Geraetekarte,
+                                  # welcher Stand der App die Anzeige gerade bedient.
+                                  "version": version(),
                                   # ★ Der Stand, den der Server GERADE ausliefert. Die
                                   # Oberflaeche vergleicht ihn mit dem, mit dem sie selbst
                                   # geladen wurde — weicht er ab, laeuft im Browser eine
