@@ -241,3 +241,32 @@ def test_balken_liest_die_entitaet_nicht_den_gerenderten_text():
     b = leer()
     r._balken(b, w)
     assert bunt(b) == 20 * 4
+
+
+# ── Laufschrift in der Vorschau andeuten ────────────────────────────────────
+
+def test_vorschau_deutet_laufschrift_an_ohne_das_gesendete_bild_zu_aendern():
+    """★★ Der Kern: die Marke darf NUR in die Vorschau, nie ans Geraet.
+
+    Auf der Matrix zeichnet WLED die Laufschrift auf einem eigenen Segment; im
+    Bildspeicher steht dort absichtlich Schwarz. Wuerde die Marke mitgesendet, stuenden
+    auf der Matrix zwei Texte uebereinander — einer laufend, einer stehend.
+    """
+    from panel.render import RenderErgebnis, ScrollAuftrag
+    r = renderer()
+    gesendet = leer()
+    erg = RenderErgebnis(bild=gesendet, scrolls=[ScrollAuftrag(
+        text="lange meldung", bg="00c000", fg="ffffff", region=(0, 0, 64, 8))])
+
+    vorschau = r.vorschau_mit_laufschrift(erg)
+    assert vorschau is not gesendet, "auf einer Kopie, sonst faerbt es das gesendete Bild"
+    assert bunt(gesendet) == 0, "das Bild fuer das Geraet bleibt an der Stelle schwarz"
+    assert bunt(vorschau) > 0, "die Vorschau zeigt etwas"
+
+
+def test_ohne_laufschrift_bleibt_es_dasselbe_bild():
+    """Kein unnoetiges Kopieren — die Vorschau wird alle 3 s geholt."""
+    from panel.render import RenderErgebnis
+    r = renderer()
+    erg = RenderErgebnis(bild=leer())
+    assert r.vorschau_mit_laufschrift(erg) is erg.bild

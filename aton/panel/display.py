@@ -272,7 +272,10 @@ class Display:
         """
         if self.letztes_ergebnis is not None:
             self._kaltes_bild = None
-            return self.letztes_ergebnis.bild
+            # ★ Laufende Meldungen in der Vorschau ANDEUTEN. Auf dem Geraet zeichnet WLED
+            # sie auf einem eigenen Segment, im Bildspeicher steht dort Schwarz — die
+            # Betriebsansicht zeigte also nichts, obwohl auf der Matrix etwas lief.
+            return self.renderer.vorschau_mit_laufschrift(self.letztes_ergebnis)
         if self._kaltes_bild is None:
             self._kaltes_bild = self.renderer.frame(self.vorwahl, self.aktive_notizen()).bild
         return self._kaltes_bild

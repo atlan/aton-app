@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.21.4 — running messages are visible in the preview
+
+On the device WLED draws the scrolling text on a **segment of its own**; in the app's
+frame buffer that area is deliberately black. The Operations view therefore showed nothing
+while something was running on the matrix — and the message looked swallowed.
+
+The preview now indicates it: the area in the level colour, the text standing still, and a
+leading `»` to mark that it is in fact scrolling. Without that character a short message
+would look exactly like a static bar.
+
+⚠ **Preview only, never in the image that is sent.** It is drawn on a copy. If the marker
+went to the device, two texts would sit on top of each other on the matrix — one scrolling,
+one static. A test pins down both halves.
+
 ## 0.21.3 — a freshly added curve waited up to five minutes
 
 Noticed while rolling out 0.21.2, not by the tests: `neu_laden()` does register a new

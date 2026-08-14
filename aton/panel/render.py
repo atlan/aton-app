@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 
 from . import plugin
 from .config import IconSpec, NotifyCfg, PanelCfg, TextSpec, Widget
-from .const import DEFAULT_COLOR, UNAVAILABLE_STATES
+from .const import DEFAULT_COLOR, DEFAULT_FONT, UNAVAILABLE_STATES
 from .fonts import FontRegistry
 from .icons import IconRegistry, _hex2rgb
 from .templates import TemplateEngine, TemplateError
@@ -47,6 +47,9 @@ class ScrollAuftrag:
     # Auf welchem WLED-Segment diese Laufschrift laeuft. Steht fest an der Meldezeile
     # (beim Einlesen vergeben), NICHT an der Meldung — siehe `config._scroll_segmente`.
     segment: int = 1
+    # Nur fuer die VORSCHAU: mit welcher Schrift die Andeutung gezeichnet wird. Auf dem
+    # Geraet malt WLED mit seiner eigenen — die kennt diese App gar nicht.
+    font_name: str = DEFAULT_FONT
 
 
 @dataclass
@@ -684,6 +687,30 @@ class Renderer:
                       fill=_hex2rgb(w.fill))
         d.line(punkte, fill=_hex2rgb(self._farbe(w.color)))
 
+    def vorschau_mit_laufschrift(self, ergebnis: "RenderErgebnis") -> Image.Image:
+        """Das Bild fuer die VORSCHAU — Laufschriften angedeutet statt schwarz.
+
+        ⚠⚠ NUR fuer die Vorschau, niemals fuer das Geraet. Dort zeichnet WLED die
+        Laufschrift selbst auf einem eigenen Segment, und der Bildspeicher bleibt an der
+        Stelle absichtlich schwarz. Wer diese Marken mitsendet, malt gegen das
+        Scroll-Segment an — auf der Matrix stuenden dann zwei Texte uebereinander, einer
+        laufend und einer stehend.
+        """
+        if not ergebnis.scrolls:
+            return ergebnis.bild
+        # ★ Auf einer KOPIE, damit der Transport unveraendert das bekommt, was er
+        # bekommen soll. `letztes_ergebnis.bild` ist dasselbe Objekt, das gesendet wurde.
+        bild = ergebnis.bild.copy()
+        for s in ergebnis.scrolls:
+            x, y, w, h = s.region
+            ImageDraw.Draw(bild).rectangle([x, y, x + w - 1, y + h - 1],
+                                           fill=_hex2rgb(s.bg))
+            # ★ Das »-Zeichen unterscheidet die Andeutung von einer stehenden Meldung.
+            # Ohne das saehe die Vorschau bei kurzem Text genauso aus wie ein Balken, und
+            # man wuesste nicht, ob die Meldung laeuft oder steht.
+            self._schreibe(bild, "\u00bb" + s.text, x, y, w, h, s.fg, s.font_name, "left")
+        return bild
+
     def _series(self, bild: Image.Image, w: Widget,
                 fehler: list[str] | None = None) -> None:
         """Spalten mit frei gewaehlten Reihen — Text und Symbole gemischt.
@@ -912,7 +939,8 @@ class Renderer:
             ergebnis.scrolls.append(ScrollAuftrag(
                 text=text, bg=bg, fg=fg, region=(w.x, w.y, w.w, w.h),
                 speed=cfg.scroll_speed, yoff=cfg.scroll_yoff, font=cfg.scroll_font,
-                fx=cfg.scroll_fx, segment=w.scroll_segment))
+                fx=cfg.scroll_fx, segment=w.scroll_segment,
+                font_name=cfg.font))
             return
         ImageDraw.Draw(bild).rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1],
                                        fill=_hex2rgb(bg))
