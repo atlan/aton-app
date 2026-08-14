@@ -83,6 +83,12 @@ slider, the screen selectors and a list of values.
   backs off (10, 20, 40, 60 s) but keeps rendering, so the preview stays live.
 - **Brightness** without `brightness.entity` does **not survive a restart**. An
   `input_number` keeps it and makes it automatable.
+- ⚠ A brightness change sends a **full frame**: on a frozen segment the value alone does
+  not change a standing image, the pixels have to be written again. Aton sets the
+  **segment** brightness, not WLED's global one — the two multiply.
+- **Send errors** count frames that failed *although* Home Assistant considered the device
+  reachable. Attempts made while the gate is not yet `on` are probes; they set
+  "not reachable since …" but are not counted.
 
 ## Widgets
 

@@ -64,9 +64,15 @@ What to read here:
 |---|---|
 | **Display on / off** | whether the gate lets Aton draw at all |
 | **Dry run – not sending** | the computed image is shown, the panel is untouched |
-| **not reachable** | the device did not answer — check `host` |
+| **not reachable since …** | nothing has got through since that time — check `host`, and whether the device has power |
 | **Frames**, **Changed pixels**, **Bytes per frame** | proof that something is happening |
-| **Send errors** | anything other than 0 means the transmission is failing |
+| **Send errors** | a frame that failed **although** Home Assistant considered the device reachable |
+
+Reachability is a state, not a tally: a panel that spent the night without power shows one
+line saying since when, not thousands of incidents. Attempts made while the gate does not
+yet report `on` are probes — they set the state but are not counted as send errors. So a
+send error count above 0 really does mean something is wrong, not that a device was
+switched off.
 
 The picture in the card is what Aton would send. If it looks right, you are one line away
 from the real thing.
@@ -80,9 +86,12 @@ If nothing appears:
 
 1. **Is the gate open?** With a `gate.entity` that is `off`, Aton deliberately draws
    nothing. The card says "Display off".
-2. **Is the device reachable?** "not reachable" points at `host`, not at your
-   description.
-3. **Does WLED know its own geometry?** Aton sends pixels for `size`; if WLED is set up
+2. **Is the device reachable?** "not reachable since …" points at `host` or at the device,
+   not at your description.
+3. **Just switched on?** Aton waits for the gate entity to report `on` before it sends —
+   Home Assistant only sets that once it is talking to the device, which can be 20 seconds
+   or more after the power comes up. The card says what it is waiting for.
+4. **Does WLED know its own geometry?** Aton sends pixels for `size`; if WLED is set up
    with a different width, the picture is scrambled rather than absent.
 
 ## 5. Optional: controls in Home Assistant

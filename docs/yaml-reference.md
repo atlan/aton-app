@@ -59,7 +59,7 @@ encoding is what replaces it.
 ```yaml
 gate:
   entity: light.matrix_power     # the real off switch of the display
-  fallback: switch.matrix_relay  # applies when the gate does not exist at all
+  fallback: switch.matrix_relay  # decides on/off when the gate is missing or unavailable
   script: script.toggle_matrix   # optional: what the on/off button triggers
   wartezeit: 90                  # seconds to wait for the gate before sending anyway
 ```
@@ -118,6 +118,16 @@ The slider writes where the brightness is also **read** — to `brightness.entit
 ⚠ Without an entity the value **does not survive a restart**; it falls back to
 `brightness_default`. An `input_number` keeps it and makes it automatable — that is the
 reason to configure one.
+
+⚠ A brightness change sends a **full frame**. On a frozen segment the segment brightness
+only takes effect once the pixels are written again — the value on its own does not change
+a standing image. On a panel whose content moves this would happen on the next cycle
+anyway; on a static one (a to-do list, a forecast) it would never happen, and the slider
+would look broken. The cost is one full frame per slider move, and only then.
+
+⚠ Aton sets the **segment** brightness, not WLED's global one. The two multiply, so the
+value in WLED's own UI stays and still applies. That is deliberate: the global slider
+belongs to you.
 
 ## `led_pitch` — display only
 
