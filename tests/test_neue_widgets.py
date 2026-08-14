@@ -52,12 +52,24 @@ class SymboleAttrappe:
 
 
 class VerlaufAttrappe:
-    def __init__(self, punkte=None, grund=""):
+    """⚠ Antwortet NUR auf die erwartete Entitaet.
+
+    Die erste Fassung gab ihre Punkte unabhaengig von der ID heraus — und deckte damit
+    zu, dass der Renderer `getattr(w.text, "value")` las statt `w.text.entity`. Der
+    Vorgabewert von `getattr` machte daraus ein stilles None, die Kurve fragte nach der
+    leeren ID, und die Attrappe lieferte trotzdem. Gefunden hat es erst das Ausrollen.
+    Eine Attrappe, die alles beantwortet, prueft nichts.
+    """
+
+    def __init__(self, punkte=None, grund="", fuer="sensor.t"):
         self._punkte = punkte or []
         self._grund = grund
+        self._fuer = fuer
+        self.gefragt = []
 
     def punkte(self, eid, stunden):
-        return self._punkte
+        self.gefragt.append((eid, stunden))
+        return self._punkte if eid == self._fuer else []
 
     def fehler(self, eid, stunden):
         return self._grund
@@ -208,3 +220,24 @@ def test_verdichten_mittelt_statt_wegzuwerfen():
 
 def test_verdichten_laesst_kurze_reihen_in_ruhe():
     assert _verdichten([1.0, 2.0], 10) == [1.0, 2.0]
+
+
+def test_kurve_fragt_nach_der_richtigen_entitaet():
+    """Der Regressionstest zu genau dem Fehler, den erst das Ausrollen gefunden hat."""
+    v = VerlaufAttrappe([1.0, 5.0, 3.0], fuer="sensor.t")
+    r = renderer(verlauf=v)
+    w = Widget(type="sparkline", x=0, y=0, w=8, h=16, color="ffffff",
+               text=TextSpec(entity="sensor.t"), hours=12)
+    r._kurve(leer(), w)
+    assert v.gefragt == [("sensor.t", 12)], "die Entitaet und der Zeitraum muessen ankommen"
+
+
+def test_balken_liest_die_entitaet_nicht_den_gerenderten_text():
+    """`format` darf den Zahlenwert nicht verderben — 21,5 °C ist keine Zahl mehr."""
+    r = renderer({"sensor.x": "50"})
+    w = Widget(type="bar", x=0, y=0, w=40, h=4, color="ffffff",
+               text=TextSpec(entity="sensor.x", format="{:.1f} °C"),
+               skala_min=0.0, skala_max=100.0)
+    b = leer()
+    r._balken(b, w)
+    assert bunt(b) == 20 * 4

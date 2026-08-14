@@ -691,7 +691,7 @@ def _widget(wert: Any, pfad: str, grid: Grid, vorgabe_font: str, vorgabe_farbe: 
         # braucht es die Entitaet selbst, nicht ihren gerenderten Text. Ein `template:`
         # koennte alles Moegliche liefern; welche Entitaet abzufragen waere, stuende
         # nirgends.
-        if not getattr(widget.text, "value", None):
+        if not widget.text.entity:
             raise ConfigError(pfad, "type: sparkline braucht 'value' (die Entitaet, deren "
                                     "Verlauf gezeichnet wird) — 'template' reicht nicht, "
                                     "der Verlauf wird beim Recorder erfragt")

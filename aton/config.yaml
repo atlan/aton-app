@@ -1,5 +1,5 @@
 name: Aton
-version: "0.21.1"
+version: "0.21.3"
 slug: aton
 description: >-
   Renders LED matrix displays (WLED/HUB75) from a YAML description:

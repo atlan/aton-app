@@ -508,9 +508,16 @@ class Renderer:
         mehr gewinnen (Komma, Einheit). Nur wenn keine Entitaet dasteht — also bei einer
         Vorlage — wird der gerenderte Text als Zahl gelesen.
         """
-        eid = getattr(w.text, "value", None)
+        # ⚠⚠ Das Feld heisst `entity`, obwohl der YAML-Schluessel `value:` ist. Ein
+        # `getattr(w.text, "value", None)` stand hier zuerst und lieferte STILL None —
+        # der Vorgabewert verdeckt den Tippfehler. Bei `bar` fiel es nicht auf (der
+        # Rueckfall ueber den gerenderten Text rettete es), bei `sparkline` lehnte der
+        # Loader jede Kurve als „braucht value" ab. Gefunden beim Ausrollen, nicht von
+        # den Tests: deren Attrappe gab ihre Punkte unabhaengig von der Entitaets-ID
+        # heraus und war damit zu nachsichtig.
+        eid = w.text.entity if w.text else None
         if eid:
-            return self._zahl(eid, getattr(w.text, "attribute", None))
+            return self._zahl(eid, w.text.attribute)
         try:
             return float(str(self._text(w.text)).strip().replace(",", "."))
         except (TypeError, ValueError):
@@ -640,7 +647,7 @@ class Renderer:
         ⚠ Ohne Daten wird NICHTS gezeichnet und der Grund gemeldet. Eine Linie auf der
         Grundlinie saehe aus wie „der Wert war die ganze Zeit null".
         """
-        eid = getattr(w.text, "value", "")
+        eid = (w.text.entity if w.text else "") or ""
         werte = self.verlauf.punkte(eid, w.hours) if self.verlauf else []
         if len(werte) < 2:
             if fehler is not None:

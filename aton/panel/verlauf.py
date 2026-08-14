@@ -40,6 +40,8 @@ class VerlaufsSpeicher:
         self._kurven: dict[tuple[str, int], list[float]] = {}
         self._gefragt: set[tuple[str, int]] = set()
         self._stand: dict[tuple[str, int], str] = {}
+        # Weckt die Auffrischung, sobald eine NEUE Kurve dazukommt — siehe `anmelden`.
+        self._neu = asyncio.Event()
 
     # -- Lesen (synchron, aus dem Zeichenweg) ------------------------------
     def punkte(self, entity_id: str, stunden: int) -> list[float]:
@@ -51,8 +53,18 @@ class VerlaufsSpeicher:
         return self._stand.get((entity_id, stunden), "")
 
     def anmelden(self, entity_id: str, stunden: int) -> None:
-        """Diese Kurve wird gebraucht. Mehrfach anmelden ist harmlos."""
-        self._gefragt.add((entity_id, stunden))
+        """Diese Kurve wird gebraucht. Mehrfach anmelden ist harmlos.
+
+        ⚠ Eine NEUE Kurve weckt die Auffrischung. Ohne das wartet sie bis zum Ende des
+        laufenden Schlafs — beim Ausrollen gemessen: eine frisch eingetragene `sparkline`
+        meldete „kein Verlauf (noch nicht geholt)" und haette es bis zu **fuenf Minuten**
+        getan. Wer ein Widget einfuegt und danach auf eine leere Flaeche schaut, haelt es
+        fuer kaputt, nicht fuer geduldig.
+        """
+        schluessel = (entity_id, stunden)
+        if schluessel not in self._gefragt:
+            self._gefragt.add(schluessel)
+            self._neu.set()
 
     # -- Auffrischen (Hintergrundaufgabe) ----------------------------------
     async def run(self) -> None:
@@ -68,7 +80,12 @@ class VerlaufsSpeicher:
                     # wird gemerkt, damit das Widget ihn zeigen kann, statt leer zu bleiben.
                     self._stand[schluessel] = f"{type(e).__name__}: {e}"
                     _LOG.warning("Verlauf %s (%d h) nicht geholt: %s", *schluessel, e)
-            await asyncio.sleep(INTERVALL_S)
+            # Schlafen — aber aufwachen, sobald eine neue Kurve angemeldet wird.
+            self._neu.clear()
+            try:
+                await asyncio.wait_for(self._neu.wait(), INTERVALL_S)
+            except asyncio.TimeoutError:
+                pass
 
     async def _hole(self, entity_id: str, stunden: int) -> None:
         beginn = datetime.now(timezone.utc) - timedelta(hours=stunden)

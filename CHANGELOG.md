@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.21.3 — a freshly added curve waited up to five minutes
+
+Noticed while rolling out 0.21.2, not by the tests: `neu_laden()` does register a new
+`sparkline`, but the refresher happened to be asleep — the tile said "no history (not
+fetched yet)" and would have kept saying so for up to **five minutes**. Anyone who adds a
+widget and then looks at an empty area concludes it is broken, not patient. A new curve
+now wakes the background task.
+
+## 0.21.2 — `value:` is called `entity` in the code
+
+⚠ **A mistake of mine, found while deploying and not by the tests.** Four places read
+`getattr(w.text, "value", None)` — but the field in `TextSpec` is `entity`, only the YAML
+key is `value:`. The default of `getattr` turned that into a **silent None**: on `bar` it
+went unnoticed (the fallback via the rendered text saved it), on `sparkline` the loader
+rejected every curve with "needs value" — while `value:` was right there.
+
+★ **Why the tests stayed quiet:** the history double returned its points regardless of the
+entity id it was asked for. A double that answers everything checks nothing. It now only
+answers for the expected id, and two new tests pin down that the entity and the period
+really arrive.
+
 ## 0.21.1 — several scrolling texts at once
 
 Until now the rule was "there is only ONE scroll segment per device", and a second running

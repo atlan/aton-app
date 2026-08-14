@@ -127,7 +127,7 @@ def _kurven(cfg: AppCfg):
                     alle.extend(seite.widgets)
         for w in alle:
             if w.type == "sparkline":
-                eid = getattr(w.text, "value", None)
+                eid = w.text.entity if w.text else None
                 if eid:
                     yield eid, w.hours
 
