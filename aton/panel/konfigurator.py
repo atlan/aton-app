@@ -98,7 +98,8 @@ class KonfiguratorAPI:
                                      status=400)
 
         panel = next((p for p in cfg.panels if p.id == panel_id), None) or cfg.panels[0]
-        renderer = Renderer(panel, self.s.ha, self.s.fonts, self.s.icons)
+        renderer = Renderer(panel, self.s.ha, self.s.fonts, self.s.icons,
+                            getattr(self.s, 'verlauf', None))
         ergebnis = renderer.frame(vorwahl, daten.get("notiz"), seiten_vorwahl)
 
         # ⚠ Vergroessern, Gitter und Punktdarstellung liegen in EINER Funktion, die auch

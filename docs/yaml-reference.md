@@ -319,6 +319,91 @@ as they do for [icon lists](#icon-lists).
 Draw them in the *Icons* tab and map the condition to the name in Home Assistant, so the
 name exists in exactly one place.
 
+### Bars — `type: bar`
+
+A level between `scale_min` and `scale_max`. The value comes from the ordinary text
+source, so `value:` (an entity) or `template:`.
+
+```yaml
+- type: bar
+  at: [0, 20]
+  size: [40, 3]
+  value: sensor.cistern_level
+  scale_min: 0
+  scale_max: 100
+  track: 202020            # the unfilled part; empty = do not draw it
+  color:                   # the ordinary colour source — so `steps` works
+    value: sensor.cistern_level
+    steps: [[50, 30c030], [20, c0c000], [0, c03030]]
+- type: bar
+  vertical: true           # fills bottom to top
+```
+
+⚠ Without a usable number **nothing is drawn** and the Operations tab says so. A bar at
+0 % would be a statement the sensor never made — `unknown` means "I do not know", not
+"empty".
+
+⚠ The key names are `scale_min` / `scale_max`, not `min` / `max`. Those two are taken by
+the bundled `bargraph` example plugin, and a plugin field that a built-in key occupies is
+rejected on load. Built-in types are not allowed to take names away from plugins.
+
+### Text lists — `type: lines`
+
+Several rows from one source: tasks, the next appointments, a shopping list. `series`
+makes **columns**, `icons` makes **icons** — this makes **rows**.
+
+```yaml
+- type: lines
+  at: [0, 12]
+  size: [64, 20]
+  max_rows: 3              # 0 = as many as fit the height
+  line_spacing: 1
+  template: >-
+    {% for item in state_attr('todo.shopping','items')[:5] %}
+    @cart {{ item.summary }}
+    {% endfor %}
+```
+
+The source is split on line breaks; `separator:` overrides that. A leading `@name ` is an
+**icon** — the same notation as in `series`.
+
+⚠ Rows that are too long are **shortened, not wrapped**: 64 px hold eight to twelve
+characters depending on the font, and wrapping would turn three tasks into one. Rows that
+do not fit at all are reported in the Operations tab rather than silently dropped.
+
+### Trend — `type: sparkline`
+
+The only widget that looks back. It draws the recorded history of one entity.
+
+```yaml
+- type: sparkline
+  at: [0, 24]
+  size: [64, 8]
+  value: sensor.outdoor_temperature   # the entity — a template will not do
+  hours: 24
+  color: 40a0ff
+  fill: 102040                        # area under the curve; empty = line only
+  # scale_min / scale_max omitted = the range of the data itself
+```
+
+⚠ **`value:` is required, `template:` is not enough.** The curve is not read from the
+state mirror but requested from Home Assistant's recorder — for that the entity itself is
+needed, and a template only produces text.
+
+★ **Leave the scale open unless you have a reason.** With `scale_min: 0` an outdoor
+temperature around 20 °C is a flat line at the very top with no visible movement; the
+range of the data uses the full height.
+
+**How it works, and what it costs.** A background task fetches each curve every five
+minutes and keeps it in memory; drawing only reads from there. Rendering runs every
+`interval` — a recorder query has no business in that loop. The data is averaged down to
+at most 256 points (averaged, not sampled: taking every n-th value would drop exactly the
+peak you wanted to see).
+
+⚠ Before the first fetch, and whenever Home Assistant is unreachable, **nothing is drawn**
+and the reason appears in the Operations tab. A line along the baseline would look like
+"the value was zero all along".
+
 ## Screen groups
 
 An area whose content is exchanged. Each group becomes a selector

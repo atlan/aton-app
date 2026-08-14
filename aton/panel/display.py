@@ -64,10 +64,10 @@ class Notiz:
 
 class Display:
     def __init__(self, panel: PanelCfg, ha: HomeAssistant,
-                 fonts: FontRegistry, icons: IconRegistry):
+                 fonts: FontRegistry, icons: IconRegistry, verlauf=None):
         self.cfg = panel
         self.ha = ha
-        self.renderer = Renderer(panel, ha, fonts, icons)
+        self.renderer = Renderer(panel, ha, fonts, icons, verlauf)
         self.transport = WledTransport(panel)
 
         self._lock = asyncio.Lock()

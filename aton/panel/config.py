@@ -99,6 +99,16 @@ class Widget:
     row_fonts: list[str] = field(default_factory=list)
     cell_w: int | None = None
     cell_h: int | None = None
+    # Balken und Kurve: None heisst „nicht gesetzt" und bedeutet je Typ etwas anderes —
+    # siehe die Begruendung beim Einlesen.
+    skala_min: float | None = None
+    skala_max: float | None = None
+    track: str | None = None
+    vertical: bool = False
+    hours: int = 24
+    fill: str | None = None
+    max_rows: int = 0
+    separator: str = "\n"
     # nur eigene Typen aus /config/aton_widgets: die geprueften Werte der Felder, die das
     # Plugin selbst angemeldet hat. Bei eingebauten Typen immer leer.
     optionen: dict[str, Any] = field(default_factory=dict)
@@ -639,6 +649,49 @@ def _widget(wert: Any, pfad: str, grid: Grid, vorgabe_font: str, vorgabe_farbe: 
         raise ConfigError(pfad, "type: text braucht 'text', 'value' oder 'template'")
     if typ == "image" and not widget.image:
         raise ConfigError(pfad, "type: image braucht 'image' (Dateiname in aton_icons)")
+
+    if typ in ("bar", "sparkline"):
+        # ★ `min`/`max` bleiben BEWUSST None, wenn sie fehlen. Bei `bar` setzt der
+        # Renderer 0..100 ein, bei `sparkline` heisst None „nimm die Spanne der Daten" —
+        # eine feste 0 waere dort das Gegenteil von hilfreich: eine Aussentemperatur um
+        # 20 °C ergaebe eine Linie ganz oben ohne jede sichtbare Bewegung.
+        if "scale_min" in d:
+            widget.skala_min = _float(d["scale_min"], f"{pfad}.scale_min")
+        if "scale_max" in d:
+            widget.skala_max = _float(d["scale_max"], f"{pfad}.scale_max")
+        if not widget.text:
+            raise ConfigError(pfad, f"type: {typ} braucht eine Textquelle, die den Wert "
+                                    "liefert — 'value' (Entitaet) oder 'template'")
+
+    if typ == "bar":
+        if d.get("track"):
+            widget.track = _farbe(d["track"], f"{pfad}.track")
+        widget.vertical = bool(d.get("vertical", False))
+
+    if typ == "sparkline":
+        widget.hours = _int(d.get("hours", 24), f"{pfad}.hours")
+        if not 1 <= widget.hours <= 168:
+            raise ConfigError(f"{pfad}.hours", "muss zwischen 1 und 168 liegen")
+        if d.get("fill"):
+            widget.fill = _farbe(d["fill"], f"{pfad}.fill")
+        # ⚠ Der Verlauf kommt NICHT aus einer Vorlage, sondern aus dem Recorder — dafuer
+        # braucht es die Entitaet selbst, nicht ihren gerenderten Text. Ein `template:`
+        # koennte alles Moegliche liefern; welche Entitaet abzufragen waere, stuende
+        # nirgends.
+        if not getattr(widget.text, "value", None):
+            raise ConfigError(pfad, "type: sparkline braucht 'value' (die Entitaet, deren "
+                                    "Verlauf gezeichnet wird) — 'template' reicht nicht, "
+                                    "der Verlauf wird beim Recorder erfragt")
+
+    if typ == "lines":
+        widget.max_rows = _int(d.get("max_rows", 0), f"{pfad}.max_rows")
+        if "separator" in d:
+            widget.separator = str(d["separator"])
+        if "line_spacing" in d:
+            widget.line_spacing = _int(d["line_spacing"], f"{pfad}.line_spacing")
+        if not widget.text:
+            raise ConfigError(pfad, "type: lines braucht eine Textquelle, die die Zeilen "
+                                    "liefert — 'template', 'value' oder 'text'")
 
     if typ in ("icons", "series"):
         widget.spacing = _int(d.get("spacing", 1), f"{pfad}.spacing")

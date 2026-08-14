@@ -19,6 +19,7 @@ from .fonts import FontRegistry
 from .hass import HomeAssistant
 from .i18n import Katalog
 from .icons import IconRegistry
+from .verlauf import VerlaufsSpeicher
 
 _LOG = logging.getLogger("panel")
 
@@ -37,6 +38,8 @@ class AppState:
         # Add-on-Option: eigene Widget-Typen aus /config/aton_widgets ueberhaupt lesen.
         self.custom_widgets = custom_widgets
         self.displays: dict[str, Display] = {}
+        # Verlaufsspeicher fuer `type: sparkline` — wird in `main()` gesetzt.
+        self.verlauf = None
         self.session = None
         self._aufgaben: dict[str, asyncio.Task] = {}
         # Warum gerade keine Anzeige laeuft. Die Oberflaeche zeigt das an — sonst steht
@@ -90,7 +93,15 @@ class AppState:
         self.fonts = FontRegistry(neu.fonts)
         self.icons = IconRegistry()
 
-        self.displays = {p.id: Display(p, self.ha, self.fonts, self.icons)
+        # ⚠ Neu angelegte Kurven muessen nachgemeldet werden — sonst zeigt eine frisch
+        # eingetragene `sparkline` bis zum naechsten App-Start „kein Verlauf".
+        # Abmelden waere hier falsch: der Speicher ist nach Entitaet und Zeitraum
+        # geschluesselt, und eine Kurve, die spaeter wiederkommt, waere sonst erneut leer.
+        if self.verlauf:
+            for eid, stunden in _kurven(neu):
+                self.verlauf.anmelden(eid, stunden)
+
+        self.displays = {p.id: Display(p, self.ha, self.fonts, self.icons, self.verlauf)
                          for p in neu.panels}
         self.ladefehler = ""
         self.starte_displays()
@@ -99,6 +110,26 @@ class AppState:
                   len(neu.panels), len(self.fonts.namen()), len(self.icons.namen()),
                   len(plugin.registry.namen()))
         return True
+
+
+def _kurven(cfg: AppCfg):
+    """Alle (Entitaet, Stunden) aus den `sparkline`-Kacheln der ganzen Beschreibung.
+
+    ★ Die Widgets stecken an drei Stellen: im Grundbild, in den Seiten der Screens und in
+    den aus `notify:` erzeugten Overlays. Wer nur `panel.widgets` durchgeht, uebersieht
+    genau die Kurve, die jemand in einen Screen gelegt hat.
+    """
+    for panel in cfg.panels:
+        alle = list(panel.widgets) + list(panel.overlays)
+        for gruppe in panel.groups:
+            for screen in gruppe.screens:
+                for seite in screen.seiten:
+                    alle.extend(seite.widgets)
+        for w in alle:
+            if w.type == "sparkline":
+                eid = getattr(w.text, "value", None)
+                if eid:
+                    yield eid, w.hours
 
 
 def optionen() -> dict:
@@ -188,7 +219,18 @@ async def main() -> int:
 
     zustand = AppState(cfg, pfad, ha, fonts, icons, katalog, custom_widgets)
     zustand.ladefehler = ladefehler
-    zustand.displays = {p.id: Display(p, ha, fonts, icons) for p in cfg.panels}
+    # ★ Der Verlaufsspeicher haelt die Kurven fuer `type: sparkline` frisch. Angemeldet
+    # wird beim Start aus der Beschreibung — dann steht schon vor dem ersten Bild fest,
+    # welche Entitaeten der Recorder liefern muss, und niemand fragt zur Renderzeit nach.
+    zustand.verlauf = VerlaufsSpeicher(ha)
+    for eid, stunden in _kurven(cfg):
+        zustand.verlauf.anmelden(eid, stunden)
+    if zustand.verlauf._gefragt:
+        _LOG.info("Verlauf angemeldet: %s",
+                  ", ".join(f"{e} ({h} h)" for e, h in sorted(zustand.verlauf._gefragt)))
+
+    zustand.displays = {p.id: Display(p, ha, fonts, icons, zustand.verlauf)
+                        for p in cfg.panels}
 
     runner = await web.starte(zustand)
     ende = asyncio.Event()
@@ -205,12 +247,14 @@ async def main() -> int:
     async with aiohttp.ClientSession(timeout=zeitgrenzen) as session:
         zustand.session = session
         ha_aufgabe = asyncio.create_task(ha.run(), name="hass")
+        verlauf_aufgabe = asyncio.create_task(zustand.verlauf.run(), name="verlauf")
         zustand.starte_displays()
         await ende.wait()
         _LOG.info("Beende …")
+        verlauf_aufgabe.cancel()
         ha_aufgabe.cancel()
         await zustand._stoppe_displays()
-        await asyncio.gather(ha_aufgabe, return_exceptions=True)
+        await asyncio.gather(ha_aufgabe, verlauf_aufgabe, return_exceptions=True)
 
     await runner.cleanup()
     return 0

@@ -56,11 +56,15 @@ class RenderErgebnis:
 
 
 class Renderer:
-    def __init__(self, panel: PanelCfg, quelle, fonts: FontRegistry, icons: IconRegistry):
+    def __init__(self, panel: PanelCfg, quelle, fonts: FontRegistry, icons: IconRegistry,
+                 verlauf=None):
         self.panel = panel
         self.quelle = quelle
         self.fonts = fonts
         self.icons = icons
+        # Optional: der Verlaufsspeicher fuer `type: sparkline`. Ohne ihn zeichnet die
+        # Kurve nichts und sagt es — Vorschau, Prueflauf und Tests kommen ohne aus.
+        self.verlauf = verlauf
         self.tmpl = TemplateEngine(quelle)
         self._gemeldet: set[str] = set()      # Fehler nur einmal je Stelle ins Protokoll
 
@@ -166,6 +170,18 @@ class Renderer:
 
         if w.type == "series":
             self._series(bild, w, fehler)
+            return
+
+        if w.type == "bar":
+            self._balken(bild, w, fehler)
+            return
+
+        if w.type == "lines":
+            self._zeilen(bild, w, fehler)
+            return
+
+        if w.type == "sparkline":
+            self._kurve(bild, w, fehler)
             return
 
         if w.type == "image":
@@ -477,6 +493,183 @@ class Renderer:
                 x = x0 + si * schritt_x + (zelle_b - sym.width) // 2
                 y = y0 + (zelle_h - sym.height) // 2
                 bild.paste(sym, (x, y), sym)
+
+    def _wert(self, w: Widget) -> float | None:
+        """Der Zahlenwert einer Kachel — aus `value` direkt, sonst aus dem gerenderten Text.
+
+        ⚠ Ueber `value` wird die ENTITAET gelesen, nicht ihr formatierter Text: `format`
+        oder `decimals` wuerden sonst mitrechnen, und aus `21,5 °C` liesse sich keine Zahl
+        mehr gewinnen (Komma, Einheit). Nur wenn keine Entitaet dasteht — also bei einer
+        Vorlage — wird der gerenderte Text als Zahl gelesen.
+        """
+        eid = getattr(w.text, "value", None)
+        if eid:
+            return self._zahl(eid, getattr(w.text, "attribute", None))
+        try:
+            return float(str(self._text(w.text)).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    def _balken(self, bild: Image.Image, w: Widget,
+                fehler: list[str] | None = None) -> None:
+        """Fuellstandsbalken zwischen `min` und `max`.
+
+        War bis 0.20.2 nur ein Beispiel-Plugin (`examples/widgets/bargraph.py`) und ist
+        jetzt eingebaut — Batterie, Zisterne, Autarkie, Restzeit sind zu haeufig, um dafuer
+        `custom_widgets: true` zu verlangen (das Verzeichnis fuehrt Code aus und ist
+        deshalb aus gutem Grund aus).
+
+        ★ Die Farbe kommt aus der GEWOEHNLICHEN Farbquelle der Kachel. Damit faerbt
+        `steps:` den Balken nach Schwellen, ohne dass dieser Typ etwas Eigenes dafuer
+        braucht — eine Batterie unter 20 % wird rot, weil das an jeder Kachel so geht.
+        """
+        von = 0.0 if w.skala_min is None else w.skala_min
+        bis = 100.0 if w.skala_max is None else w.skala_max
+        d = ImageDraw.Draw(bild)
+
+        if w.track:
+            d.rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1], fill=_hex2rgb(w.track))
+
+        wert = self._wert(w)
+        if wert is None:
+            # ⚠ Kein Balken bei 0 %: `unknown` heisst „ich weiss es nicht", nicht „leer".
+            # Ein Balken auf null waere eine Aussage, die der Sensor nie gemacht hat.
+            if fehler is not None:
+                fehler.append(f"{w.pfad}: kein Zahlenwert fuer den Balken")
+            return
+        if bis == von:
+            if fehler is not None:
+                fehler.append(f"{w.pfad}: min und max sind gleich ({von})")
+            return
+
+        anteil = min(1.0, max(0.0, (wert - von) / (bis - von)))
+        farbe = _hex2rgb(self._farbe(w.color))
+        if w.vertical:
+            hoch = round(w.h * anteil)
+            if hoch:
+                d.rectangle([w.x, w.y + w.h - hoch, w.x + w.w - 1, w.y + w.h - 1],
+                            fill=farbe)
+        else:
+            breit = round(w.w * anteil)
+            if breit:
+                d.rectangle([w.x, w.y, w.x + breit - 1, w.y + w.h - 1], fill=farbe)
+
+    def _zeilen(self, bild: Image.Image, w: Widget,
+                fehler: list[str] | None = None) -> None:
+        """Mehrere Textzeilen aus einer Quelle — Aufgaben, Termine, Einkaufszettel.
+
+        `series` macht SPALTEN, `icons` macht SYMBOLE — Textzeilen gab es bis 0.20.2
+        nicht, und wer eine Liste zeigen wollte, baute je Zeile eine eigene Kachel mit von
+        Hand gerechnetem `at:`. Beim Einfuegen einer Zeile rutschte dann alles.
+
+        ★ Ein `@name ` am Zeilenanfang ist ein SYMBOL — dieselbe Schreibweise wie bei
+        `series`. Zwei Konventionen fuer dasselbe waeren eine zu viel.
+
+        ⚠ Zu lange Zeilen werden gekuerzt, nicht umgebrochen: auf 64 px passen je nach
+        Schrift acht bis zwoelf Zeichen, ein Umbruch machte aus drei Aufgaben eine. Dass
+        gekuerzt wurde, sagt die Kachel im Betriebs-Reiter.
+        """
+        roh = str(self._text(w.text) or "")
+        trenner = w.separator if w.separator else "\n"
+        zeilen = [z.strip() for z in roh.split(trenner) if z.strip()]
+        if not zeilen:
+            return
+
+        font = self.fonts.get(w.font)
+        zeilen_h = font.measure("0")[1]
+        abstand = w.spacing if w.line_spacing is None else w.line_spacing
+        schritt = zeilen_h + abstand
+        passt = max(1, (w.h + abstand) // schritt) if schritt else 1
+        hoechstens = min(passt, w.max_rows) if w.max_rows else passt
+
+        if len(zeilen) > hoechstens and fehler is not None:
+            fehler.append(f"{w.pfad}: {len(zeilen)} Zeilen, {hoechstens} passen — "
+                          f"{len(zeilen) - hoechstens} weggelassen")
+        farbe = self._farbe(w.color)
+        unbekannt: list[str] = []
+
+        for i, zeile in enumerate(zeilen[:hoechstens]):
+            y = w.y + i * schritt
+            x, breite = w.x, w.w
+            if zeile.startswith("@"):
+                name, _, rest = zeile[1:].partition(" ")
+                try:
+                    symbol = self.icons.get(name.strip())
+                    bild.paste(symbol, (x, y), symbol)
+                    versatz = symbol.width + self.panel.grid.gap
+                    x += versatz
+                    breite -= versatz
+                except KeyError:
+                    unbekannt.append(name.strip())
+                zeile = rest.strip()
+            if zeile:
+                self._schreibe(bild, self._kuerzen(zeile, font, breite), x, y,
+                               breite, zeilen_h + 2, farbe, w.font, w.align)
+
+        if unbekannt and fehler is not None:
+            fehler.append(f"{w.pfad}: Symbol(e) nicht gefunden: {', '.join(unbekannt)}")
+
+    def _kuerzen(self, text: str, font, breite: int) -> str:
+        """So weit kuerzen, dass es in `breite` passt. Ohne Ellipse — dafuer ist kein Platz.
+
+        ⚠ Zeichenweise messen statt zu schaetzen: die eingebaute 5x3 ist proportional
+        genug, dass `breite // 4` mal zu kurz und mal zu lang liegt.
+        """
+        if font.measure(text)[0] <= breite:
+            return text
+        for n in range(len(text) - 1, 0, -1):
+            if font.measure(text[:n])[0] <= breite:
+                return text[:n]
+        return ""
+
+    def _kurve(self, bild: Image.Image, w: Widget,
+               fehler: list[str] | None = None) -> None:
+        """Der Verlauf einer Entitaet als Linie — die einzige Kachel, die zurueckblickt.
+
+        ★★ Die Daten kommen NICHT aus dem Zustandsspiegel, sondern aus HAs Recorder, und
+        zwar aus dem Verlaufsspeicher (`panel/verlauf.py`), den eine Hintergrundaufgabe
+        frisch haelt. Hier wird nur gelesen — `frame()` ist synchron und laeuft 720-mal
+        pro Stunde, eine Recorder-Abfrage hat darin nichts verloren.
+
+        ⚠ Ohne Daten wird NICHTS gezeichnet und der Grund gemeldet. Eine Linie auf der
+        Grundlinie saehe aus wie „der Wert war die ganze Zeit null".
+        """
+        eid = getattr(w.text, "value", "")
+        werte = self.verlauf.punkte(eid, w.hours) if self.verlauf else []
+        if len(werte) < 2:
+            if fehler is not None:
+                grund = (self.verlauf.fehler(eid, w.hours) if self.verlauf
+                         else "kein Verlaufsspeicher")
+                fehler.append(f"{w.pfad}: kein Verlauf fuer {eid} "
+                              f"({grund or 'noch nicht geholt'})")
+            return
+
+        # ★ Ohne feste Skala die Spanne der Daten nehmen. Bei einer Aussentemperatur um
+        # 20 °C waere eine Skala ab 0 eine waagerechte Linie ganz oben — sichtbar waere
+        # genau nichts. Ein Mindestabstand verhindert die Division durch (fast) null,
+        # wenn der Wert ueber Stunden konstant war.
+        von = min(werte) if w.skala_min is None else w.skala_min
+        bis = max(werte) if w.skala_max is None else w.skala_max
+        if bis - von < 1e-9:
+            von, bis = von - 0.5, bis + 0.5
+
+        d = ImageDraw.Draw(bild)
+        n = len(werte)
+        unten, hoehe = w.y + w.h - 1, w.h - 1
+
+        def punkt(i: int, v: float) -> tuple[int, int]:
+            x = w.x + (i * (w.w - 1) // (n - 1))
+            anteil = min(1.0, max(0.0, (v - von) / (bis - von)))
+            return x, unten - round(hoehe * anteil)
+
+        punkte = [punkt(i, v) for i, v in enumerate(werte)]
+
+        if w.fill:
+            # Flaeche als Polygon bis zur Grundlinie — sonst haette die Fuellung Loecher,
+            # wo die Kurve steil faellt.
+            d.polygon([(w.x, unten)] + punkte + [(w.x + w.w - 1, unten)],
+                      fill=_hex2rgb(w.fill))
+        d.line(punkte, fill=_hex2rgb(self._farbe(w.color)))
 
     def _series(self, bild: Image.Image, w: Widget,
                 fehler: list[str] | None = None) -> None:

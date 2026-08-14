@@ -202,7 +202,7 @@ SEITE: list[Feld] = [
 ]
 
 WIDGET_TYPEN = ["tile", "text", "icon", "image", "rect", "calendar", "clock", "clock_wd",
-                "notify", "icons", "series"]
+                "notify", "icons", "series", "bar", "lines", "sparkline"]
 
 WIDGET: list[Feld] = [
     Feld("type", "auswahl", "Typ", vorgabe="tile", optionen=WIDGET_TYPEN),
@@ -250,6 +250,39 @@ WIDGET: list[Feld] = [
          "Feste Breite × Höhe je Symbol bzw. Spalte. Leer = größtes vorkommendes; damit "
          "stehen die Spalten auch bei unterschiedlich breitem Inhalt sauber untereinander",
          nur_typ=["icons", "serie"]),
+
+    # ── Balken und Kurve teilen sich die Skala ──────────────────────────────
+    # ★ Absichtlich DIESELBEN Schlüsselnamen für beide Typen: „von wo bis wo" ist dieselbe
+    # Frage, und wer den Typ wechselt, soll seine Skala behalten statt sie neu zu tippen.
+    #
+    # ⚠⚠ Und deshalb NICHT `min`/`max`: diese Namen benutzt das mitgelieferte
+    # Beispiel-Plugin `bargraph`, und ein Plugin-Feld, das ein eingebauter Schlüssel
+    # belegt, wird beim Laden abgelehnt (seit 0.13.0, mit Absicht — es käme sonst nie beim
+    # Plugin an). Die eingebauten Typen hier hätten also jede fremde Datei zerlegt, die
+    # `min:` benutzt. Die Tests haben genau das gefangen.
+    Feld("scale_min", "float", "Skalenanfang",
+         "Leer bei `sparkline` = der kleinste Wert im Zeitraum", vorgabe=0.0,
+         nur_typ=["bar", "sparkline"]),
+    Feld("scale_max", "float", "Skalenende",
+         "Leer bei `sparkline` = der größte Wert im Zeitraum", vorgabe=100.0,
+         nur_typ=["bar", "sparkline"]),
+
+    Feld("track", "farbe", "Spurfarbe",
+         "Der ungefüllte Teil des Balkens. Leer = gar nicht zeichnen", nur_typ=["bar"]),
+    Feld("vertical", "bool", "Senkrecht",
+         "Füllt von unten nach oben statt von links nach rechts", nur_typ=["bar"]),
+
+    Feld("hours", "int", "Zeitraum", "Wie weit die Kurve zurückreicht", vorgabe=24,
+         min=1, max=168, einheit="h", nur_typ=["sparkline"]),
+    Feld("fill", "farbe", "Füllung",
+         "Fläche unter der Kurve. Leer = nur die Linie", nur_typ=["sparkline"]),
+
+    Feld("max_rows", "int", "Zeilen höchstens",
+         "0 = so viele wie in die Höhe passen", vorgabe=0, min=0, max=64,
+         nur_typ=["lines"]),
+    Feld("separator", "text", "Trenner",
+         "Womit die Textquelle in Zeilen zerfällt. Leer = Zeilenumbruch",
+         nur_typ=["lines"]),
 ] + _nur(MELDUNG, "notify")
 
 # Die Textquelle ist ein eigener Baustein: genau eine der drei Quellen, dazu Formatierung.

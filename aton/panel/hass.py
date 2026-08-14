@@ -36,6 +36,10 @@ class HomeAssistant:
         self._ws = None
         self.bereit = asyncio.Event()
         self._horcher: list[Callable[[str], None]] = []
+        # Offene Anfragen: Nachrichten-ID -> Future. Bis 0.21.0 kannte diese Anbindung nur
+        # Senden ohne Antwort (`rufe_dienst`) und den Ereignisstrom. Der Verlauf ist die
+        # erste Stelle, die eine ANTWORT braucht — siehe `frage()`.
+        self._offen: dict[int, asyncio.Future] = {}
 
     # -- Lesezugriff -------------------------------------------------------
     def state(self, entity_id: str) -> str | None:
@@ -102,10 +106,52 @@ class HomeAssistant:
                         self._uebernehme_alle(daten.get("result") or [])
                     elif daten.get("type") == "event":
                         self._uebernehme_aenderung(daten.get("event") or {})
+                    elif daten.get("type") == "result" and daten.get("id") in self._offen:
+                        self._beantworte(daten)
                     elif daten.get("type") == "result" and not daten.get("success", True):
                         _LOG.warning("HA meldet Fehler: %s", daten.get("error"))
         self._ws = None
+        # ⚠ Wartende Anfragen aufwecken, sonst haengen sie bis in ihre Zeitgrenze und die
+        # Auffrischung des Verlaufs steht so lange still — bei einem HA-Neustart also
+        # ausgerechnet dann, wenn gleich wieder Daten kommen.
+        self._brich_offene_ab("Verbindung geschlossen")
         raise RuntimeError("WebSocket geschlossen")
+
+    def _beantworte(self, daten: dict) -> None:
+        fut = self._offen.pop(daten["id"], None)
+        if fut is None or fut.done():
+            return
+        if daten.get("success", True):
+            fut.set_result(daten.get("result"))
+        else:
+            fut.set_exception(RuntimeError(str(daten.get("error"))))
+
+    def _brich_offene_ab(self, grund: str) -> None:
+        for fut in self._offen.values():
+            if not fut.done():
+                fut.set_exception(RuntimeError(grund))
+        self._offen.clear()
+
+    async def frage(self, nutzlast: dict, zeitgrenze: float = 15.0):
+        """Eine Anfrage stellen und auf HAs Antwort warten.
+
+        ★ Bewusst allgemein gehalten und trotzdem nur lesend gedacht: der einzige Aufrufer
+        ist der Verlaufsspeicher. Wer hier etwas Schreibendes durchreicht, umgeht die enge
+        Fassung von `rufe_dienst` — das waere eine eigene Entscheidung, keine Nebenwirkung.
+
+        ⚠ Die Zeitgrenze ist Pflicht, nicht Kosmetik: ohne sie wartet ein Aufrufer bei
+        einem stillen Verbindungsabbruch fuer immer, und die Auffrischung des Verlaufs
+        haette danach nie wieder stattgefunden.
+        """
+        if self._ws is None:
+            raise RuntimeError("keine WebSocket-Verbindung")
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        mid = await self._sende(self._ws, nutzlast)
+        self._offen[mid] = fut
+        try:
+            return await asyncio.wait_for(fut, zeitgrenze)
+        finally:
+            self._offen.pop(mid, None)
 
     async def rufe_dienst(self, entity_id: str, dienst: str,
                           daten: dict | None = None) -> bool:

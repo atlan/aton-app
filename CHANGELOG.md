@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.21.0 — three new widget types, and the app looks back for the first time
+
+Asked which widgets were missing, the installation's own YAML gave the answer.
+
+**`sparkline` — the history of an entity.** Until now *everything* on the panel was "now";
+`panel/` contained no `history`, no `recorder`, no `statistics`. That left out the very
+genre a dot matrix is made for: the curve.
+
+- The data comes from HA's recorder over the existing WebSocket. For that the connection
+  can now **ask** at all instead of only sending (`hass.frage`) — pending requests with a
+  timeout, and on a dropped connection the waiters are woken instead of being left to run
+  into it.
+- A **background store** (`panel/verlauf.py`) keeps the curves fresh, every five minutes.
+  `Renderer.frame()` is synchronous and runs 720 times an hour — a recorder query has no
+  business in that loop.
+- Reduction to 256 points is done by **averaging, not sampling**: taking every n-th value
+  would drop exactly the peak you wanted to see.
+- Without data **nothing** is drawn and the reason is reported. A line along the baseline
+  would look like "the value was zero all along".
+- Without `scale_min`/`scale_max` the range of the data applies. With a fixed 0 an outdoor
+  temperature around 20 °C would be a flat line at the very top.
+
+**`bar` — built in instead of an example.** It only existed as a 52-line plugin
+(`examples/widgets/bargraph.py`), which requires `custom_widgets: true` — an option that is
+off for good reason, because that directory executes code. Battery, cistern, self-
+sufficiency are too common for that price. The colour comes from the ordinary colour
+source, so `steps:` shades the bar by threshold without the type needing anything of its
+own.
+
+⚠ The keys are **`scale_min`/`scale_max`**, not `min`/`max`. Those are exactly what the
+example plugin uses, and a plugin field occupied by a built-in key is rejected on load
+(since 0.13.0, deliberately). The built-in types would otherwise have broken every foreign
+file that uses `min:`. **The tests caught this**, not me.
+
+**`lines` — several text rows from one source.** `series` makes columns, `icons` makes
+icons; text rows did not exist. Anyone wanting a list built one widget per row with a
+hand-computed `at:` — inserting a row shifted everything. A leading `@name ` is an icon,
+the same notation as in `series`. Rows that are too long are **shortened, not wrapped**:
+wrapping would turn three tasks into one.
+
 ## 0.20.2 — the brightness slider works, and the page stops jumping
 
 Two separate bugs that together looked like one: "move the slider, nothing happens, then
