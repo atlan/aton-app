@@ -311,29 +311,52 @@ def test_lange_meldung_laeuft_mit_der_flaeche_ihrer_zeile(tmp_path):
     lang = "x" * 40
     ergebnis = zeichne(panel, [{"text": lang, "channel": "warnungen"}])
 
-    assert ergebnis.scroll is not None
-    assert ergebnis.scroll.region == (0, 8, 64, 8)
-    assert ergebnis.scroll.text == lang
+    assert len(ergebnis.scrolls) == 1
+    assert ergebnis.scrolls[0].region == (0, 8, 64, 8)
+    assert ergebnis.scrolls[0].text == lang
     # Der Bildspeicher bleibt an der Stelle schwarz — WLED zeichnet darueber.
     assert not zeile_belegt(ergebnis.bild, 10)
 
 
-def test_nur_eine_laufschrift_und_das_wird_gesagt(tmp_path):
-    """Es gibt genau EIN Scroll-Segment je Geraet — die zweite Zeile kann nicht auch.
+def test_zwei_laufschriften_gleichzeitig(tmp_path):
+    """Seit 0.21.1 laeuft jede Meldezeile auf ihrem EIGENEN Segment.
 
-    Wer zuerst gezeichnet wird, bekommt es: hier die Hauptzeile, denn sie steht in der
-    Beschreibung vor der Warnzeile. Das ist dieselbe Regel wie bei ueberlappenden Kacheln
-    und damit die einzige, die man sich merken muss.
+    ⚠ Dieser Test stand vorher genau andersherum da („nur eine, und das wird gesagt").
+    Die Grenze war Atons, nicht WLEDs: am Quelltext von WLED-MM geprueft ist `SEGENV` das
+    Segment selbst (`FX.h`: `#define SEGENV strip._segments[strip.getCurrSegmentId()]`),
+    Scroll-Offset, Farbschritt und Taktung liegen also je Segment getrennt, und
+    `service()` bedient sie in Index-Reihenfolge. MAX_NUM_SEGMENTS ist auf ESP32 32.
     """
     panel = beschreibung(tmp_path, ZWEI_ZEILEN).panels[0]
     lang = "x" * 40
     ergebnis = zeichne(panel, [{"text": lang, "channel": "warnungen"},
                                {"text": lang}])
 
-    assert ergebnis.scroll.region == (0, 0, 64, 8)
-    assert any("nur ein" in f and "Scroll-Segment" in f for f in ergebnis.fehler)
-    # Die verdraengte Zeile bleibt leer statt halb gezeichnet.
+    assert len(ergebnis.scrolls) == 2, "beide Zeilen laufen"
+    segmente = sorted(s.segment for s in ergebnis.scrolls)
+    assert len(set(segmente)) == 2, "und zwar auf verschiedenen Segmenten"
+    assert segmente == [panel.scroll_segment, panel.scroll_segment + 1]
+    assert not any("Scroll-Segment" in f for f in ergebnis.fehler), \
+        "die alte Absage darf nicht mehr kommen"
+    # Der Bildspeicher bleibt an beiden Stellen schwarz — WLED zeichnet darueber.
     assert not zeile_belegt(ergebnis.bild, 10)
+
+
+def test_segmente_haengen_an_der_zeile_nicht_an_der_meldung(tmp_path):
+    """Stabil zugeteilt: Zeile 2 behaelt ihr Segment, auch wenn Zeile 1 gerade schweigt.
+
+    ★ Sonst wuerde WLED die laufende Animation neu starten, sobald die andere Zeile
+    anfaengt oder aufhoert — der Scroll-Offset haengt am Segment.
+    """
+    panel = beschreibung(tmp_path, ZWEI_ZEILEN).panels[0]
+    lang = "x" * 40
+    nur_warnung = zeichne(panel, [{"text": lang, "channel": "warnungen"}])
+    beide = zeichne(panel, [{"text": lang, "channel": "warnungen"}, {"text": lang}])
+
+    seg_allein = nur_warnung.scrolls[0].segment
+    seg_zusammen = [s.segment for s in beide.scrolls
+                    if s.region == nur_warnung.scrolls[0].region][0]
+    assert seg_allein == seg_zusammen
 
 
 # ==========================================================================

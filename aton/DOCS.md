@@ -96,7 +96,13 @@ Position through the grid (`cell: [row, column]`) or absolutely (`at: [x, y]` wi
 `size`).
 
 Types: `tile` (default), `text`, `icon`, `image`, `rect`, `calendar`, `clock`, `clock_wd`,
-`notify`, `icons`, `series`.
+`notify`, `icons`, `series`, `bar`, `lines`, `sparkline`.
+
+`bar` draws a level between `scale_min` and `scale_max` (the colour source works, so
+`steps` shades it by threshold). `lines` puts several text rows from one source into its
+area — a leading `@name ` is an icon, rows that are too long are shortened, not wrapped.
+`sparkline` draws the **recorded history** of `value:` as a curve; a background task
+fetches it from HA's recorder every five minutes, and without data nothing is drawn.
 
 Two keys apply to all of them: `layer` decides the drawing order (everything is on 0 and is
 drawn in list order — a higher layer lands on top), `visible_when` is a Jinja condition that
@@ -165,8 +171,8 @@ pending. Give it `layer: 1` so it is drawn above the screen groups.
 
 `aton.notify` (fields `text`, `level`, `duration`, `id`, `channel`, `panel`) fills it;
 `aton.notify_clear` removes it (by `id`, by `channel`, or everything). Short text is a
-static bar, longer text uses WLED's own marquee — and since the device has only one
-scrolling segment, only the first line can scroll.
+- ★ Several rows can scroll at once: each gets its own WLED segment, assigned at load
+  time. A marquee carries at most 32 characters (WLED's segment name limit).
 
 Several lines are possible: one with `channel: warnings` takes only messages of that
 channel, `show_levels: warning` narrows it to a level. A line without a channel is the

@@ -109,6 +109,9 @@ class Widget:
     fill: str | None = None
     max_rows: int = 0
     separator: str = "\n"
+    # nur type=notify: das WLED-Segment, auf dem DIESE Zeile ihre Laufschrift laufen
+    # laesst. Beim Einlesen fest vergeben — siehe `_scroll_segmente`.
+    scroll_segment: int = 1
     # nur eigene Typen aus /config/aton_widgets: die geprueften Werte der Felder, die das
     # Plugin selbst angemeldet hat. Bei eingebauten Typen immer leer.
     optionen: dict[str, Any] = field(default_factory=dict)
@@ -219,6 +222,16 @@ class PanelCfg:
     canvas_segment: int = 0
     scroll_segment: int = 1
     clear_segments_to: int = 32   # WLEDs MAX_NUM_SEGMENTS auf ESP32
+
+    @property
+    def hoechstes_scroll_segment(self) -> int:
+        """Das oberste von den Meldezeilen belegte Segment.
+
+        Darueber darf `clear_segments_to` aufraeumen, darunter nicht — sonst loeschte
+        jedes Vollbild die zweite Laufschrift.
+        """
+        zeilen = [w for w in self.alle_widgets() if w.type == "notify"]
+        return max([w.scroll_segment for w in zeilen], default=self.scroll_segment)
     # Rastermass der Matrix in Millimetern (P3 = 3.0). Rein fuer die DARSTELLUNG:
     # bezieht den Zoom der Vorschau darauf und zeichnet die LEDs als Punkte. Auf das,
     # was an WLED geht, hat es keinen Einfluss.
@@ -969,7 +982,43 @@ def _panel(wert: Any, pfad: str, vorgaben: dict) -> PanelCfg:
         if x < 0 or y < 0 or x + w > panel.width or y + h > panel.height:
             raise ConfigError(f"{pfad}.notify.region",
                               f"liegt ausserhalb der Flaeche {panel.width}x{panel.height}")
+    _scroll_segmente(panel, pfad)
     return panel
+
+
+def _scroll_segmente(panel: PanelCfg, pfad: str) -> None:
+    """Jeder Meldezeile ein eigenes WLED-Segment geben — fest, nicht je Meldung.
+
+    ★★ Warum das hier steht und nicht im Renderer: die Zuteilung muss **stabil** sein.
+    Wenn Zeile A aufhoert zu laufen und B anfaengt, darf B nicht A's Segment bekommen —
+    WLED wuerde sonst die Animation von A neu starten (der Scroll-Offset `SEGENV.aux0`
+    haengt am Segment). Im Renderer waere die Reihenfolge vom gerade aktiven Screen
+    abhaengig und damit gerade nicht stabil.
+
+    ★ Mehrere Laufschriften gehen ueberhaupt erst seit 0.21.1. Vorher gab es genau ein
+    Segment, und die zweite Meldung bekam eine Absage. Am WLED-Quelltext geprueft ist das
+    kein Geraete-Limit: `SEGENV` IST das Segment (`FX.h`), Offset, Farbschritt und Taktung
+    liegen also je Segment getrennt; `service()` bedient sie in Index-Reihenfolge.
+    """
+    zeilen = [w for w in panel.alle_widgets() if w.type == "notify"]
+    for i, w in enumerate(zeilen):
+        w.scroll_segment = panel.scroll_segment + i
+
+    # ⚠ Die Bildflaeche darf nicht ueberschrieben werden, und `clear_segments_to` raeumt
+    # alles OBERHALB der Laufschriften weg — beides muss zu der Zahl passen. Lieber beim
+    # Laden mit Pfad scheitern als im Betrieb ein Segment ueberbuegeln.
+    hoechstes = panel.scroll_segment + max(0, len(zeilen) - 1)
+    if panel.scroll_segment <= panel.canvas_segment:
+        raise ConfigError(f"{pfad}.scroll_segment",
+                          f"muss ueber der Bildflaeche liegen (canvas_segment "
+                          f"{panel.canvas_segment})")
+    if hoechstes >= panel.clear_segments_to:
+        raise ConfigError(
+            f"{pfad}.scroll_segment",
+            f"{len(zeilen)} Meldezeile(n) brauchen die Segmente {panel.scroll_segment}"
+            f"..{hoechstes}, aber `clear_segments_to` raeumt ab {panel.clear_segments_to} "
+            "auf. Entweder clear_segments_to erhoehen (WLEDs MAX_NUM_SEGMENTS ist auf "
+            "ESP32 32) oder weniger Meldezeilen")
 
 
 class _Loader(yaml.SafeLoader):

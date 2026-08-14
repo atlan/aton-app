@@ -44,6 +44,9 @@ class ScrollAuftrag:
     yoff: int = 128
     font: int = 128
     fx: int = 122
+    # Auf welchem WLED-Segment diese Laufschrift laeuft. Steht fest an der Meldezeile
+    # (beim Einlesen vergeben), NICHT an der Meldung — siehe `config._scroll_segmente`.
+    segment: int = 1
 
 
 @dataclass
@@ -51,7 +54,10 @@ class RenderErgebnis:
     bild: Image.Image
     aktive_screens: dict[str, str] = field(default_factory=dict)
     aktive_seiten: dict[str, int] = field(default_factory=dict)
-    scroll: ScrollAuftrag | None = None
+    # ★ Eine LISTE seit 0.21.1. WLED bedient seine Segmente unabhaengig voneinander
+    # (`SEGENV` ist das Segment selbst), es koennen also mehrere Meldezeilen gleichzeitig
+    # laufen. Vorher ging genau eine, und die zweite bekam eine Absage.
+    scrolls: list[ScrollAuftrag] = field(default_factory=list)
     fehler: list[str] = field(default_factory=list)
 
 
@@ -890,19 +896,16 @@ class Renderer:
             # Zu lang fuer einen stehenden Balken -> WLEDs eigene Laufschrift.
             # Der Bildspeicher bleibt hier schwarz; das Scroll-Segment zeichnet darueber.
             #
-            # ⚠ Es gibt nur EIN Scroll-Segment je Geraet (`panel.scroll_segment`). Die
-            # zweite laufende Meldung kann also nicht auch noch laufen — das gehoert
-            # gesagt und nicht verschluckt.
-            if ergebnis.scroll is None:
-                ergebnis.scroll = ScrollAuftrag(
-                    text=text, bg=bg, fg=fg, region=(w.x, w.y, w.w, w.h),
-                    speed=cfg.scroll_speed, yoff=cfg.scroll_yoff, font=cfg.scroll_font,
-                    fx=cfg.scroll_fx)
-            else:
-                ergebnis.fehler.append(
-                    f"{w.pfad}: zweite Laufschrift gleichzeitig — das Geraet hat nur ein "
-                    f"Scroll-Segment. Kuerzer als max_bar_chars ({cfg.max_bar_chars}) "
-                    "bliebe die Meldung ein stehender Balken")
+            # ★★ Jede Meldezeile hat ihr EIGENES Segment (beim Einlesen vergeben), es
+            # koennen also beliebig viele gleichzeitig laufen. Bis 0.21.0 gab es genau
+            # eines, und die zweite Meldung bekam eine Absage — das war Atons Grenze, nicht
+            # WLEDs: am Quelltext geprueft ist `SEGENV` das Segment selbst
+            # (`FX.h`: `#define SEGENV strip._segments[strip.getCurrSegmentId()]`), Offset,
+            # Farbschritt und Taktung liegen also je Segment getrennt.
+            ergebnis.scrolls.append(ScrollAuftrag(
+                text=text, bg=bg, fg=fg, region=(w.x, w.y, w.w, w.h),
+                speed=cfg.scroll_speed, yoff=cfg.scroll_yoff, font=cfg.scroll_font,
+                fx=cfg.scroll_fx, segment=w.scroll_segment))
             return
         ImageDraw.Draw(bild).rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1],
                                        fill=_hex2rgb(bg))

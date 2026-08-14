@@ -464,7 +464,7 @@ class Display:
                 if not darf:
                     return
                 await self.transport.sende(session, ergebnis.bild, self.helligkeit(),
-                                           ergebnis.scroll, probe=probe)
+                                           ergebnis.scrolls, probe=probe)
                 self._rueckzug_fortschreiben()
                 if self._faehrt_hoch():
                     # ★★ Waehrend das Geraet hochfaehrt sind Zeitueberschreitungen die

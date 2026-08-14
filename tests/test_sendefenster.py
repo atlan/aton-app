@@ -143,7 +143,7 @@ class SitzungsAttrappe:
 def transport():
     p = types.SimpleNamespace(id="wohnzimmer", host="192.168.1.50", width=128, height=64,
                               canvas_segment=0, scroll_segment=1, clear_segments_to=32,
-                              full_frame_every=60)
+                              hoechstes_scroll_segment=1, full_frame_every=60)
     return WledTransport(p)
 
 

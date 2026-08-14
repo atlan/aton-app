@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.21.1 — several scrolling texts at once
+
+Until now the rule was "there is only ONE scroll segment per device", and a second running
+message got a refusal. **That was Aton's limit, not WLED's.** Checked against the WLED-MM
+source:
+
+- `FX.h`: `#define SEGENV strip._segments[strip.getCurrSegmentId()]` — scroll offset
+  (`aux0`), colour shift (`aux1`) and timing (`step`) live **in the segment itself**. Two
+  segments running "Scrolling Text" are therefore independent.
+- `FX_fcn.cpp`: `service()` walks `_segments` in **index order** — a higher index is
+  serviced later and sits on top where they overlap. The notification row has always
+  relied on exactly that.
+- `MAX_NUM_SEGMENTS` is **32** on ESP32 (16 only on ESP8266).
+
+Every notification row now gets its own segment, assigned **at load time** and not per
+message. That is the heart of it: the assignment has to be stable. If row 2 took row 1's
+segment whenever row 1 fell silent, WLED would restart the running animation — the offset
+belongs to the segment. In the renderer the order would depend on the currently active
+screen, which is precisely not stable.
+
+- `clear_segments_to` now cleans up above the **highest** scroll segment, not above the
+  first — otherwise every full frame would have deleted the second scrolling text.
+- If the number of rows does not fit below `clear_segments_to`, **loading** fails with the
+  path and the arithmetic, instead of overwriting a segment at runtime.
+- The signature that prevents a needless re-send now applies **per segment**.
+
+⚠ **Side finding in the WLED source:** `WLED_MAX_SEGNAME_LEN` is 48 (ESP32) or 32
+(ESP8266) — Aton's `max_chars` defaults to **60**. A long message was therefore truncated
+by the device with nothing said anywhere. It is now visibly shortened to 32 (the smaller
+of the two limits, so it never surprises on any device).
+
 ## 0.21.0 — three new widget types, and the app looks back for the first time
 
 Asked which widgets were missing, the installation's own YAML gave the answer.

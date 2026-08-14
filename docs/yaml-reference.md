@@ -166,6 +166,9 @@ Position either through the grid or absolutely:
 | `notify` | [message line](#notifications) — empty until something is pending |
 | `icons` | [a list of icons](#icon-lists) from a template, wrapped into the area |
 | `series` | [columns](#column-series) of label / icon / label — an hourly forecast, for example |
+| `bar` | [a level](#bars--type-bar) between `scale_min` and `scale_max` |
+| `lines` | [text rows](#text-lists--type-lines) from one source — tasks, appointments |
+| `sparkline` | [the recorded history](#trend--type-sparkline) of an entity as a curve |
 
 Two keys apply to every type:
 
@@ -528,9 +531,15 @@ data:
   the line's `levels:` does not define is refused when loading — such a line would stay
   empty forever.
 - `aton.notify_clear` also takes `channel`: it then clears that channel only.
-- ⚠ **Only one marquee at a time.** WLED scrolls in a single segment
-  (`scroll_segment`), so only the first line whose text exceeds `max_bar_chars` scrolls.
-  The second one says so instead of scrolling silently.
+- ★ **Several marquees at once.** Every notification row gets its own WLED segment,
+  assigned when the config is loaded — WLED services its segments independently (scroll
+  offset, colour shift and timing live in the segment itself), so the rows do not
+  interfere. Segments are taken from `scroll_segment` upwards, and `clear_segments_to`
+  must stay above the highest of them, otherwise a full frame would wipe the second row.
+  If that does not add up, loading fails and says so. `MAX_NUM_SEGMENTS` is 32 on ESP32.
+- ⚠ A marquee carries at most **32 characters**: the text travels in WLED's segment name,
+  and `WLED_MAX_SEGNAME_LEN` is 48 on ESP32, 32 on ESP8266. `max_chars` (default 60)
+  applies first, but anything beyond 32 is cut by the device — silently, until now.
 
 ### The old `notify:` block
 

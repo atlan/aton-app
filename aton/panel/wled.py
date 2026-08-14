@@ -31,6 +31,11 @@ _LOG = logging.getLogger(__name__)
 
 CHUNK = 900          # Werte je Anfrage — bleibt unter der ~16-kB-Grenze
 
+#: Wie viele Zeichen WLEDs Segmentname traegt — und damit eine Laufschrift.
+#: `WLED_MAX_SEGNAME_LEN` in WLEDs `const.h`: 48 auf ESP32, 32 auf ESP8266. Die kleinere
+#: Zahl zu nehmen kostet nichts und schneidet auf keinem Geraet ueberraschend ab.
+MAX_SEGMENTNAME = 32
+
 
 class Unerreichbar(Exception):
     """Ein Block ist nicht angekommen — der Rest des Bildes waere vergeudet.
@@ -75,8 +80,10 @@ class WledTransport:
         # ohnehin mit dem ersten Vollbild raus.
         self._letzte_bri: int | None = None
         self._zaehler = 0
-        self._scroll_aktiv = False
-        self._scroll_signatur: object = "_init_"
+        # Je SEGMENT eine Signatur bzw. ein Aktiv-Merker. Bis 0.21.0 war beides je EINE
+        # Variable — es gab ja nur ein Scroll-Segment.
+        self._scroll_signaturen: dict[int, object] = {}
+        self._scroll_aktive: set[int] = set()
         # Laeuft der gerade gesendete Frame als Erreichbarkeitsprobe? Siehe `_fehler`.
         self._probe = False
 
@@ -86,7 +93,7 @@ class WledTransport:
 
     # ------------------------------------------------------------------
     async def sende(self, session: aiohttp.ClientSession, bild: Image.Image, bri: int,
-                    scroll: ScrollAuftrag | None, probe: bool = False) -> None:
+                    scroll: list[ScrollAuftrag] | None, probe: bool = False) -> None:
         """Ein Bild ans Geraet schicken.
 
         `probe=True` heisst: die App weiss selbst nicht, ob dort jemand ist — Home
@@ -106,11 +113,11 @@ class WledTransport:
             # Zustand, BEVOR es sendet. Ohne diese Zeilen gilt eine Meldung als
             # geschickt, die nie ankam — und weil sie sich danach nicht mehr „aendert",
             # wuerde sie nie wiederholt.
-            self._scroll_signatur = "_nach_fehler_"
-            self._scroll_aktiv = False
+            self._scroll_signaturen.clear()
+            self._scroll_aktive.clear()
 
     async def _frame(self, session: aiohttp.ClientSession, bild: Image.Image, bri: int,
-                     scroll: ScrollAuftrag | None) -> None:
+                     scroll: list[ScrollAuftrag] | None) -> None:
         p = self.panel
         pixel = bild_zu_pixeln(bild)
         self._zaehler += 1
@@ -182,9 +189,12 @@ class WledTransport:
             # die es gar nicht gibt, sind bestenfalls wirkungslos. Vorgabe 32 = der
             # Standard auf ESP32; wer eine Firmware mit mehr Segmenten faehrt und noch
             # Altlasten oberhalb hat, setzt `clear_segments_to` hoeher.
+            # ⚠ AB der Nummer nach der LETZTEN Laufschrift raeumen, nicht nach der ersten:
+            # seit 0.21.1 belegen mehrere Meldezeilen aufeinanderfolgende Segmente, und ein
+            # `stop: 0` darauf haette die zweite Laufschrift bei jedem Vollbild geloescht.
             gesendet += await self._post(session, {"seg": [
                 {"id": n, "stop": 0}
-                for n in range(p.scroll_segment + 1, p.clear_segments_to)]})
+                for n in range(p.hoechstes_scroll_segment + 1, p.clear_segments_to)]})
             self.stat.letzte_pixel = len(pixel)
         else:
             arr = differenz(pixel, self._letztes)
@@ -216,42 +226,56 @@ class WledTransport:
         # die den aktuellen Zustand falsch behauptet, ist schlimmer als gar keine.
         self.stat.letzter_fehler = ""
 
-        await self._scroll(session, scroll, bri, vollbild)
+        await self._scrolls(session, scroll, bri, vollbild)
 
     # ------------------------------------------------------------------
-    async def _scroll(self, session, scroll, bri: int, vollbild: bool) -> None:
-        """Laufschrift-Segment pflegen.
+    async def _scrolls(self, session, auftraege, bri: int, vollbild: bool) -> None:
+        """Die Laufschrift-Segmente pflegen — seit 0.21.1 mehrere gleichzeitig.
 
         ⚠ Nur bei Aenderung senden — jedes Neusenden setzt WLEDs Animation zurueck, die
         Schrift finge also bei jedem Frame von vorn an. Diese Sperre ist der Grund fuer die
         Signatur; sie ging beim Umbau der alten Anlage einmal verloren und ist am Geraet
-        wieder nachgewiesen worden.
+        wieder nachgewiesen worden. Sie gilt jetzt JE SEGMENT: eine neue Meldung in Zeile 2
+        darf die laufende Schrift in Zeile 1 nicht von vorn beginnen lassen.
 
-        ⚠ Und: Segment 1 muss IMMER existieren. HAs WLED-Anbindung legt die Haupt-Entitaet
-        (den echten Aus-Schalter) nur an, solange das Geraet MEHR ALS EIN Segment hat.
-        Ohne Laufschrift wird es unsichtbar an den unteren Rand geparkt.
+        ⚠ Und: das erste Scroll-Segment muss IMMER existieren. HAs WLED-Anbindung legt die
+        Haupt-Entitaet (den echten Aus-Schalter) nur an, solange das Geraet MEHR ALS EIN
+        Segment hat. Ohne Laufschrift wird es unsichtbar an den unteren Rand geparkt.
         """
         p = self.panel
-        geparkt = {"id": p.scroll_segment, "on": False, "frz": False, "start": 0, "stop": 1,
-                   "startY": p.height - 1, "stopY": p.height}
+        auftraege = list(auftraege or [])
+        jetzt = {a.segment: a for a in auftraege}
 
-        # Text und Farbe entscheiden, ob neu gesendet werden muss — dazu jetzt die Flaeche:
-        # dieselbe Meldung in einer ANDEREN Meldezeile ist ein anderes Segment.
-        signatur = (scroll.text, scroll.bg, scroll.region) if scroll else None
-        geaendert = signatur != self._scroll_signatur
-        self._scroll_signatur = signatur
+        # Was gerade laeuft und nicht mehr gebraucht wird, wird geparkt. Ohne das bliebe
+        # eine erledigte Meldung als Laufschrift stehen — der Bildspeicher darunter ist
+        # schwarz, sie wuerde also nie von selbst verschwinden.
+        for segment in sorted(self._scroll_aktive - set(jetzt)):
+            self._scroll_aktive.discard(segment)
+            self._scroll_signaturen.pop(segment, None)
+            await self._post(session, {"seg": [self._geparkt(segment)]})
 
-        if scroll:
-            if geaendert or not self._scroll_aktiv:
-                self._scroll_aktiv = True
-                await self._post(session, {"seg": [self._scroll_segment(scroll, bri)]})
-            return
+        for segment in sorted(jetzt):
+            auftrag = jetzt[segment]
+            # Text, Farbe und Flaeche entscheiden — dieselbe Meldung in einer ANDEREN
+            # Meldezeile ist eine andere Laufschrift.
+            signatur = (auftrag.text, auftrag.bg, auftrag.region)
+            if signatur != self._scroll_signaturen.get(segment) \
+                    or segment not in self._scroll_aktive:
+                self._scroll_signaturen[segment] = signatur
+                self._scroll_aktive.add(segment)
+                await self._post(session, {"seg": [self._scroll_segment(auftrag, bri)]})
 
-        if self._scroll_aktiv:
-            self._scroll_aktiv = False
-            await self._post(session, {"seg": [geparkt]})
-        elif vollbild:
-            await self._post(session, {"seg": [geparkt]})
+        # ★ Beim Vollbild das erste Segment ausdruecklich parken, wenn dort nichts laeuft —
+        # sonst koennte es nach einem WLED-Neustart fehlen, und HA legt den Hauptschalter
+        # nur bei MEHR ALS EINEM Segment an.
+        if vollbild and p.scroll_segment not in jetzt:
+            await self._post(session, {"seg": [self._geparkt(p.scroll_segment)]})
+
+    def _geparkt(self, segment: int) -> dict:
+        """Ein Scroll-Segment unsichtbar an den unteren Rand stellen, statt es zu loeschen."""
+        p = self.panel
+        return {"id": segment, "on": False, "frz": False, "start": 0, "stop": 1,
+                "startY": p.height - 1, "stopY": p.height}
 
     def _scroll_segment(self, scroll: ScrollAuftrag, bri: int) -> dict:
         """Natives WLED "Scrolling Text" (FX122). Der Text steht im Segmentnamen `n`.
@@ -270,7 +294,7 @@ class WledTransport:
         `ix` = Y-Versatz (128 = mittig im 8px-Streifen), `c2` = Schrift (128 = 6x8),
         `o1` = Verlauf an + `pal:0` -> Textfarbe = col[0].
         """
-        d = {"id": self.panel.scroll_segment, "on": True, "bri": bri, "frz": False,
+        d = {"id": scroll.segment, "on": True, "bri": bri, "frz": False,
              "fx": scroll.fx, "sx": scroll.speed, "ix": scroll.yoff,
              "c1": 0, "c2": scroll.font, "o1": True, "o2": False, "o3": False,
              "pal": 0, "col": [list(_hex2rgb(scroll.bg)), [0, 0, 0], [0, 0, 0]],
@@ -283,8 +307,15 @@ class WledTransport:
         # Die Laufschrift zeichnet WLED selbst — die Schrift der App gilt hier nicht.
         # Umlaute kann WLEDs eingebaute Schrift nicht, deshalb dieselbe Ersatzschreibung
         # wie in der 5x3-Schrift. Auf `max_chars` ist der Text schon im Renderer gekuerzt.
-        return (str(text).upper().replace("Ä", "AE").replace("Ö", "OE")
-                .replace("Ü", "UE").replace("ß", "SS"))
+        # ⚠⚠ WLEDs Segmentname ist begrenzt: `WLED_MAX_SEGNAME_LEN` ist auf ESP32 **48**
+        # (`const.h`), auf ESP8266 32. Atons `max_chars` steht per Vorgabe auf 60 — eine
+        # lange Meldung wurde also vom GERAET abgeschnitten, ohne dass irgendwo etwas
+        # stand. Beim Umbau auf mehrere Laufschriften am WLED-Quelltext aufgefallen.
+        # Hier wird sie sichtbar gekuerzt; die Meldezeile hat ihre eigene Grenze
+        # (`max_chars`), die weiterhin zuerst greift, wenn sie kleiner ist.
+        sauber = (str(text).upper().replace("Ä", "AE").replace("Ö", "OE")
+                  .replace("Ü", "UE").replace("ß", "SS"))
+        return sauber[:MAX_SEGMENTNAME]
 
     # ------------------------------------------------------------------
     async def _post(self, session: aiohttp.ClientSession, daten: dict) -> int:
