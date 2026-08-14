@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.5 — `lines` painted outside its box
+
+Found by the user, with exactly the right question: "is it intentional that a fixed text
+is shown directly below the tile?" It was not.
+
+He had switched a separator (`rect`, `size: [64, 1]`) to `type: lines`. That makes the
+tile **1 px tall**, while a text row needs 5. Two mistakes together:
+
+- `passt = max(1, …)` forced "at least one row" even when none fits.
+- `_schreibe` was given the height of the **font** instead of the height of the **tile** —
+  so the text sat 6 px below and **painted over the weather forecast underneath**.
+  Reproduced on the device: `y=10..15` carried "BALKEN3" on top of the forecast.
+
+Every row is now clipped to the tile's box, and if none fits, nothing is drawn and the
+reason is named: `Hoehe 1 px reicht fuer keine Zeile (eine braucht 5 px)`. A tile that
+paints outside does not shift anything — it overwrites its neighbours, and that only shows
+once something is there.
+
 ## 0.21.4 — running messages are visible in the preview
 
 On the device WLED draws the scrolling text on a **segment of its own**; in the app's

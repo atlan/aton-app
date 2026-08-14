@@ -595,8 +595,21 @@ class Renderer:
         zeilen_h = font.measure("0")[1]
         abstand = w.spacing if w.line_spacing is None else w.line_spacing
         schritt = zeilen_h + abstand
-        passt = max(1, (w.h + abstand) // schritt) if schritt else 1
+        passt = (w.h + abstand) // schritt if schritt else 0
         hoechstens = min(passt, w.max_rows) if w.max_rows else passt
+
+        # ⚠⚠ KEIN `max(1, …)` hier. Das stand zuerst so da („wenigstens eine Zeile") und
+        # war falsch: bei einer Kachel von 1 px Hoehe wurde trotzdem eine Zeile gezeichnet,
+        # und weil `_schreibe` die Hoehe der SCHRIFT bekam statt die der Kachel, stand der
+        # Text 6 px UNTERHALB der Kachel. Am Geraet gesehen (14.08.2026): aus einer
+        # Trennlinie `size: [64, 1]` wurde ein `lines`, und „BALKEN3" erschien unter dem
+        # Strich. Eine Kachel, die aus ihrem Kasten malt, verschiebt nichts — sie
+        # ueberschreibt die Nachbarn.
+        if hoechstens < 1:
+            if fehler is not None:
+                fehler.append(f"{w.pfad}: Hoehe {w.h} px reicht fuer keine Zeile "
+                              f"(eine braucht {zeilen_h} px)")
+            return
 
         if len(zeilen) > hoechstens and fehler is not None:
             fehler.append(f"{w.pfad}: {len(zeilen)} Zeilen, {hoechstens} passen — "
@@ -619,8 +632,12 @@ class Renderer:
                     unbekannt.append(name.strip())
                 zeile = rest.strip()
             if zeile:
-                self._schreibe(bild, self._kuerzen(zeile, font, breite), x, y,
-                               breite, zeilen_h + 2, farbe, w.font, w.align)
+                # ⚠ Auf den Kasten der Kachel begrenzen, nicht auf die Hoehe der Schrift:
+                # sonst ragt die letzte Zeile heraus und uebermalt, was darunter steht.
+                hoehe = min(zeilen_h + 2, w.y + w.h - y)
+                if hoehe > 0:
+                    self._schreibe(bild, self._kuerzen(zeile, font, breite), x, y,
+                                   breite, hoehe, farbe, w.font, w.align)
 
         if unbekannt and fehler is not None:
             fehler.append(f"{w.pfad}: Symbol(e) nicht gefunden: {', '.join(unbekannt)}")

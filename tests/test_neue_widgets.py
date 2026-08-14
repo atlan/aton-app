@@ -270,3 +270,29 @@ def test_ohne_laufschrift_bleibt_es_dasselbe_bild():
     r = renderer()
     erg = RenderErgebnis(bild=leer())
     assert r.vorschau_mit_laufschrift(erg) is erg.bild
+
+
+def test_zeilen_malen_nicht_aus_ihrem_kasten():
+    """★★ Am Geraet gesehen: aus einer Trennlinie `size: [64, 1]` wurde ein `lines`, und
+    der Text stand 6 px UNTER der Kachel. Eine Kachel, die herausmalt, uebermalt die
+    Nachbarn — das faellt erst auf, wenn dort etwas steht."""
+    r = renderer()
+    w = Widget(type="lines", x=0, y=9, w=64, h=1, color="ffffff",
+               text=TextSpec(literal="balken3"))
+    b, fehler = leer(), []
+    r._zeilen(b, w, fehler)
+    unterhalb = sum(1 for y in range(10, 20) for x in range(64)
+                    if b.getpixel((x, y)) != (0, 0, 0))
+    assert unterhalb == 0, "nichts unterhalb der Kachel"
+    assert fehler and "reicht fuer keine Zeile" in fehler[0], "und es wird gesagt"
+
+
+def test_letzte_zeile_wird_am_kasten_beschnitten():
+    """Eineinhalb Zeilen Hoehe: die zweite darf angeschnitten sein, aber nicht ueberlaufen."""
+    r = renderer()
+    w = Widget(type="lines", x=0, y=0, w=64, h=10, color="ffffff",
+               text=TextSpec(literal="eins\nzwei\ndrei"), spacing=1)
+    b = leer()
+    r._zeilen(b, w)
+    assert sum(1 for y in range(10, 32) for x in range(64)
+               if b.getpixel((x, y)) != (0, 0, 0)) == 0
