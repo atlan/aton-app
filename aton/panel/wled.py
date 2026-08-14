@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -24,10 +25,27 @@ from PIL import Image
 from .config import PanelCfg
 from .icons import _hex2rgb
 from .pixel import bild_zu_pixeln, differenz, laeufe_kodieren
+from .render import ScrollAuftrag
 
 _LOG = logging.getLogger(__name__)
 
 CHUNK = 900          # Werte je Anfrage — bleibt unter der ~16-kB-Grenze
+
+
+class Unerreichbar(Exception):
+    """Ein Block ist nicht angekommen — der Rest des Bildes waere vergeudet.
+
+    ★★ Warum eine Ausnahme und kein Rueckgabewert: ein Bild geht in bis zu acht Bloecken
+    raus, und `sende()` hat sie frueher ALLE geschickt, auch wenn der erste schon in eine
+    Zeitueberschreitung gelaufen war. Am 14.08.2026 im Protokoll gemessen — ein einziger
+    Takt beim Einschalten der Wohnzimmer-Matrix:
+
+        11:21:21  nicht erreichbar (192.168.1.50)      ← ein Connect-Timeout, ~3 s
+        11:21:23  nicht erreichbar   × 7               ← die restlichen Bloecke
+
+    Acht Meldungen, ein Sachverhalt. Der erste Block beantwortet die Frage bereits
+    vollstaendig; alles danach kostet nur Zeit und macht aus einem Befund einen Haufen.
+    """
 
 
 @dataclass
@@ -39,6 +57,13 @@ class Statistik:
     fehler: int = 0            # Gesamtzahl seit dem Start — bleibt stehen
     letzter_fehler: str = ""   # ⚠ nur der AKTUELLE Zustand, siehe unten
     erreichbar: bool = False
+    #: Seit wann ist das Geraet nicht erreichbar (Unix-Zeit)? 0 = es ist erreichbar.
+    #:
+    #: ★★ Erreichbarkeit ist ein ZUSTAND, kein Ereignis. Am 14.08.2026 stand die
+    #: Entry-Matrix 7,5 Stunden stromlos auf dem Schreibtisch und die App buchte dafuer
+    #: **5888 Sendefehler** — 5888 Vorfaelle fuer eine einzige Ursache. Eine Zeile
+    #: „nicht erreichbar seit 02:41" sagt dasselbe und stimmt die ganze Zeit ueber.
+    unerreichbar_seit: float = 0.0
 
 
 class WledTransport:
@@ -52,7 +77,8 @@ class WledTransport:
         self._zaehler = 0
         self._scroll_aktiv = False
         self._scroll_signatur: object = "_init_"
-        self._defekt = False
+        # Laeuft der gerade gesendete Frame als Erreichbarkeitsprobe? Siehe `_fehler`.
+        self._probe = False
 
     def vollbild_erzwingen(self) -> None:
         """Naechstes Bild vollstaendig senden (nach WLED-Neustart oder auf Zuruf)."""
@@ -60,11 +86,56 @@ class WledTransport:
 
     # ------------------------------------------------------------------
     async def sende(self, session: aiohttp.ClientSession, bild: Image.Image, bri: int,
-                    scroll: tuple[str, str, str] | None) -> None:
+                    scroll: ScrollAuftrag | None, probe: bool = False) -> None:
+        """Ein Bild ans Geraet schicken.
+
+        `probe=True` heisst: die App weiss selbst nicht, ob dort jemand ist — Home
+        Assistant meldet das Tor gerade nicht als `on`, und dieser Versuch soll genau das
+        klaeren. Scheitert er, ist das **kein Sendefehler**, sondern die Antwort auf die
+        Frage. Gezaehlt wird nur, was scheitert, obwohl HA das Geraet als da fuehrt.
+        """
+        self._probe = probe
+        try:
+            await self._frame(session, bild, bri, scroll)
+        except Unerreichbar:
+            # Was jetzt auf dem Geraet steht, weiss niemand — der Frame ist mittendrin
+            # abgebrochen. Also beim naechsten Mal ein Vollbild, sonst rechnet die
+            # Differenz gegen ein Bild, das dort gar nicht steht.
+            self._letztes = None
+            # ⚠ Und die Laufschrift-Sperre muss mit zurueck: `_scroll` merkt sich Text und
+            # Zustand, BEVOR es sendet. Ohne diese Zeilen gilt eine Meldung als
+            # geschickt, die nie ankam — und weil sie sich danach nicht mehr „aendert",
+            # wuerde sie nie wiederholt.
+            self._scroll_signatur = "_nach_fehler_"
+            self._scroll_aktiv = False
+
+    async def _frame(self, session: aiohttp.ClientSession, bild: Image.Image, bri: int,
+                     scroll: ScrollAuftrag | None) -> None:
         p = self.panel
         pixel = bild_zu_pixeln(bild)
         self._zaehler += 1
-        vollbild = (self._letztes is None) or (self._zaehler % p.full_frame_every == 0)
+        # ★★ Eine geaenderte Helligkeit erzwingt ein VOLLBILD, nicht nur einen `bri`-Block.
+        #
+        # Auf einem eingefrorenen Segment wirkt die Segmenthelligkeit erst, wenn die Pixel
+        # (neu) geschrieben werden — der blosse Wert aendert das stehende Bild nicht. Bei
+        # einer Anzeige, deren Inhalt sich staendig bewegt, faellt das nicht auf: der
+        # naechste Takt schreibt ohnehin Pixel. Bei einer stehenden faellt es voll auf.
+        #
+        # Am 14.08.2026 an der Anlage gemessen, sechs Takte je Anzeige:
+        #
+        #     wohnzimmer (Uhr, Temperaturen)   18–43 Pixel je Takt   → Helligkeit sofort da
+        #     wohnzimmer_tv (ToDo-Liste)        0 Pixel in 5 von 6   → Helligkeit unsichtbar
+        #     entry                             0 Pixel in 6 von 6   → dito
+        #
+        # Der User sah es genau so: Regler bewegt, WLED meldet den neuen Wert, die Matrix
+        # bleibt wie sie ist — und erst „Vollbild senden" macht sie hell bzw. dunkel.
+        # Genau das tut diese Zeile jetzt von selbst.
+        #
+        # Preis: 34 kB in sieben Bloecken statt 40 Byte, aber nur wenn jemand den Regler
+        # anfasst. Eine Helligkeit, die man erst bestaetigen muss, ist keine.
+        vollbild = ((self._letztes is None)
+                    or (self._zaehler % p.full_frame_every == 0)
+                    or (self._letzte_bri is not None and bri != self._letzte_bri))
 
         rahmen = {"id": p.canvas_segment, "on": True, "bri": bri, "pal": 0, "fx": 0,
                   "frz": True, "start": 0, "stop": p.width, "startY": 0, "stopY": p.height}
@@ -96,6 +167,11 @@ class WledTransport:
             # 2535 Werte, 34 statt 18 kB JSON, 7 statt 4 Bloecke — alle fuenf Minuten.
             arr = laeufe_kodieren(pixel, mit_schwarz=True)
             erst = dict(rahmen, i=[])
+            # ⚠ Der erste Block ist zugleich die Erreichbarkeitsprobe: winzig (`i: []`),
+            # geht als Erster raus, und wenn er scheitert, bricht `Unerreichbar` den
+            # ganzen Frame ab. Deshalb braucht die App KEINEN eigenen Ping — ein
+            # zusaetzlicher Aufruf koennte gelingen, waehrend das echte Schreiben
+            # scheitert, und wuerde dann das Falsche beweisen.
             gesendet += await self._post(session, {"on": True, "seg": [erst]})
             # ⚠ Ein "seg"-Array mit wenigen Eintraegen loescht die uebrigen NICHT (am Geraet
             # geprueft). Alte Kachelsegmente haetten hoehere Nummern als die Bildflaeche und
@@ -109,28 +185,26 @@ class WledTransport:
             gesendet += await self._post(session, {"seg": [
                 {"id": n, "stop": 0}
                 for n in range(p.scroll_segment + 1, p.clear_segments_to)]})
-            self.stat.vollbilder += 1
             self.stat.letzte_pixel = len(pixel)
         else:
             arr = differenz(pixel, self._letztes)
             self.stat.letzte_pixel = len(arr) // 2
 
-            # ★★ Die Helligkeit haengt am `rahmen` — und der geht NUR beim Vollbild raus.
-            # Ein neuer Wert kam damit erst beim naechsten turnusmaessigen Vollbild an:
-            # bei `full_frame_every: 60` und 5 s Takt bis zu FUENF MINUTEN. Am Geraet
-            # erlebt, der Regler wirkte scheinbar gar nicht.
-            #
-            # Also bei Aenderung ausdruecklich nachschicken. Nur bei Aenderung: ein `bri`
-            # in jedem Bild waere eine Anfrage mehr im 5-Sekunden-Takt, fuer einen Wert,
-            # der sich fast nie bewegt.
-            if bri != self._letzte_bri:
-                gesendet += await self._post(
-                    session, {"seg": [{"id": p.canvas_segment, "bri": bri}]})
+            # ⚠ Hier stand bis 0.20.2 ein nachgeschickter `bri`-Block. Er ist entfallen,
+            # weil eine Helligkeitsaenderung jetzt weiter oben schon ein Vollbild ausloest
+            # — und der blosse Wert ohne neu geschriebene Pixel hat auf einem
+            # eingefrorenen Segment ohnehin nichts bewirkt. Wer ihn zurueckholen will,
+            # liest erst den Kommentar an `vollbild`.
 
         for k in range(0, len(arr), CHUNK):
             gesendet += await self._post(
                 session, {"seg": [{"id": p.canvas_segment, "i": arr[k:k + CHUNK]}]})
 
+        # ★ Erst hier gezaehlt, nicht beim Aufbau: bis zu dieser Zeile ist jeder Block
+        # angekommen. Vorher stand `vollbilder += 1` oben im Zweig und zaehlte auch
+        # Vollbilder mit, von denen kein einziges Byte das Geraet erreicht hat.
+        if vollbild:
+            self.stat.vollbilder += 1
         self._letzte_bri = bri
         self._letztes = pixel
         self.stat.frames += 1
@@ -140,17 +214,7 @@ class WledTransport:
         # Vorher blieb `letzter_fehler` fuer immer stehen — die Oberflaeche zeigte dann
         # stundenlang „nicht erreichbar", obwohl laengst wieder alles lief. Eine Anzeige,
         # die den aktuellen Zustand falsch behauptet, ist schlimmer als gar keine.
-        # Der Zaehler `fehler` bleibt kumulativ: dass es geknirscht hat, soll sichtbar
-        # bleiben — nur eben als Zaehler und nicht als Dauerwarnung.
-        if not self._defekt:
-            self.stat.letzter_fehler = ""
-
-        if self._defekt:
-            # Waehrend des Sendens ist etwas schiefgegangen — was jetzt auf dem Geraet
-            # steht, weiss niemand. Also beim naechsten Mal wieder ein Vollbild, sonst
-            # rechnet die Differenz gegen ein Bild, das es dort gar nicht gibt.
-            self._letztes = None
-            self._defekt = False
+        self.stat.letzter_fehler = ""
 
         await self._scroll(session, scroll, bri, vollbild)
 
@@ -171,7 +235,9 @@ class WledTransport:
         geparkt = {"id": p.scroll_segment, "on": False, "frz": False, "start": 0, "stop": 1,
                    "startY": p.height - 1, "stopY": p.height}
 
-        signatur = scroll[:2] if scroll else None
+        # Text und Farbe entscheiden, ob neu gesendet werden muss — dazu jetzt die Flaeche:
+        # dieselbe Meldung in einer ANDEREN Meldezeile ist ein anderes Segment.
+        signatur = (scroll.text, scroll.bg, scroll.region) if scroll else None
         geaendert = signatur != self._scroll_signatur
         self._scroll_signatur = signatur
 
@@ -187,7 +253,7 @@ class WledTransport:
         elif vollbild:
             await self._post(session, {"seg": [geparkt]})
 
-    def _scroll_segment(self, scroll: tuple[str, str, str], bri: int) -> dict:
+    def _scroll_segment(self, scroll: ScrollAuftrag, bri: int) -> dict:
         """Natives WLED "Scrolling Text" (FX122). Der Text steht im Segmentnamen `n`.
 
         ★ Die Stufenfarbe steckt in der SCHRIFT, nicht im Hintergrund — absichtlich, damit
@@ -204,53 +270,68 @@ class WledTransport:
         `ix` = Y-Versatz (128 = mittig im 8px-Streifen), `c2` = Schrift (128 = 6x8),
         `o1` = Verlauf an + `pal:0` -> Textfarbe = col[0].
         """
-        cfg = self.panel.notify
-        text, farbe, _ = scroll
         d = {"id": self.panel.scroll_segment, "on": True, "bri": bri, "frz": False,
-             "fx": cfg.scroll_fx, "sx": cfg.scroll_speed, "ix": cfg.scroll_yoff,
-             "c1": 0, "c2": cfg.scroll_font, "o1": True, "o2": False, "o3": False,
-             "pal": 0, "col": [list(_hex2rgb(farbe)), [0, 0, 0], [0, 0, 0]],
-             "n": self._scroll_name(text)}
-        x, y, w, h = cfg.region
+             "fx": scroll.fx, "sx": scroll.speed, "ix": scroll.yoff,
+             "c1": 0, "c2": scroll.font, "o1": True, "o2": False, "o3": False,
+             "pal": 0, "col": [list(_hex2rgb(scroll.bg)), [0, 0, 0], [0, 0, 0]],
+             "n": self._scroll_name(scroll.text)}
+        x, y, w, h = scroll.region
         d["start"], d["stop"], d["startY"], d["stopY"] = x, x + w, y, y + h
         return d
 
     def _scroll_name(self, text: str) -> str:
         # Die Laufschrift zeichnet WLED selbst — die Schrift der App gilt hier nicht.
         # Umlaute kann WLEDs eingebaute Schrift nicht, deshalb dieselbe Ersatzschreibung
-        # wie in der 5x3-Schrift.
+        # wie in der 5x3-Schrift. Auf `max_chars` ist der Text schon im Renderer gekuerzt.
         return (str(text).upper().replace("Ä", "AE").replace("Ö", "OE")
-                .replace("Ü", "UE").replace("ß", "SS"))[: self.panel.notify.max_chars]
+                .replace("Ü", "UE").replace("ß", "SS"))
 
     # ------------------------------------------------------------------
     async def _post(self, session: aiohttp.ClientSession, daten: dict) -> int:
-        """Einen Block senden. Rueckgabe: gesendete Bytes (0 bei Fehler).
+        """Einen Block senden. Rueckgabe: gesendete Bytes. Wirft `Unerreichbar` im Fehlerfall.
 
         ★ Fehlerbehandlung mit Absicht laut: in der Vorgaengerfassung gingen echte
         Sendefehler als Nebensatz unter. WLED antwortet z.B. mit 413, wenn eine Anfrage zu
         gross ist — so etwas MUSS auffallen.
         """
         url = f"http://{self.panel.host}/json/state"
+        roh = _json_bytes(daten)
         try:
-            roh = _json_bytes(daten)
             async with session.post(url, data=roh,
                                     headers={"Content-Type": "application/json"}) as antwort:
-                if antwort.status != 200:
-                    text = await antwort.text()
-                    self._fehler(f"HTTP {antwort.status}: {text[:200]}")
-                    return 0
-            self.stat.erreichbar = True
-            return len(roh)
+                meldung = (None if antwort.status == 200
+                           else f"HTTP {antwort.status}: {(await antwort.text())[:200]}")
         except Exception as e:
-            self._fehler(f"nicht erreichbar ({type(e).__name__}: {e})")
-            return 0
+            meldung = f"nicht erreichbar ({type(e).__name__}: {e})"
+        if meldung is not None:
+            self._fehler(meldung)
+            raise Unerreichbar(meldung)
+        self.stat.erreichbar = True
+        self.stat.unerreichbar_seit = 0.0
+        return len(roh)
 
     def _fehler(self, meldung: str) -> None:
-        self.stat.fehler += 1
+        """Einen gescheiterten Block verbuchen.
+
+        ★★ Die Trennlinie: gezaehlt wird nur, was scheitert, obwohl Home Assistant das
+        Geraet als erreichbar fuehrt. Ein Versuch, mit dem die App erst herausfindet, OB
+        dort jemand ist (`probe`), ist keine Stoerung, sondern eine Messung — er setzt
+        den Zustand, aber nicht den Zaehler. Sonst stehen fuer eine Matrix, die eine
+        Nacht lang stromlos war, tausende „Vorfaelle" mit einer einzigen Ursache.
+
+        ⚠ Nicht zu verwechseln mit Wegschauen: scheitert ein Block, WAEHREND das Tor
+        `on` meldet, wird er weiterhin gezaehlt und protokolliert. Dann stimmt etwas
+        nicht, und das soll auffallen.
+        """
+        if not self._probe:
+            self.stat.fehler += 1
         self.stat.letzter_fehler = meldung
         self.stat.erreichbar = False
-        self._defekt = True
-        _LOG.warning("WLED %s (%s): %s", self.panel.id, self.panel.host, meldung)
+        if not self.stat.unerreichbar_seit:
+            self.stat.unerreichbar_seit = time.time()
+        _LOG.log(logging.INFO if self._probe else logging.WARNING,
+                 "WLED %s (%s): %s%s", self.panel.id, self.panel.host, meldung,
+                 "  (Probe — Tor meldet kein 'on')" if self._probe else "")
 
 
 def _json_bytes(daten: dict) -> bytes:

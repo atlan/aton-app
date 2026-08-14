@@ -10,7 +10,7 @@ import sys
 
 import aiohttp
 
-from . import configfile, web
+from . import configfile, plugin, web
 from .config import AppCfg, ConfigError, lade
 from .const import HA_CONFIG_DIR, INGRESS_PORT, OPTIONS_PATH, anzeige_pfad
 from .discovery import Anmeldung
@@ -26,13 +26,16 @@ _LOG = logging.getLogger("panel")
 class AppState:
     """Was die Oberflaeche zu sehen bekommt — und was der Konfigurator veraendert."""
 
-    def __init__(self, cfg: AppCfg, pfad: str, ha, fonts, icons, katalog):
+    def __init__(self, cfg: AppCfg, pfad: str, ha, fonts, icons, katalog,
+                 custom_widgets: bool = False):
         self.cfg = cfg
         self.pfad = pfad
         self.ha = ha
         self.fonts = fonts
         self.icons = icons
         self.katalog = katalog
+        # Add-on-Option: eigene Widget-Typen aus /config/aton_widgets ueberhaupt lesen.
+        self.custom_widgets = custom_widgets
         self.displays: dict[str, Display] = {}
         self.session = None
         self._aufgaben: dict[str, asyncio.Task] = {}
@@ -61,6 +64,10 @@ class AppState:
         laufende Meldungen zuruecksetzen; dafuer gibt es keinen Zwischenzustand, der zur
         Haelfte alt ist.
         """
+        # ⚠ VOR dem Einlesen: die Pruefung in config.py fragt die Registry, welche Typen
+        # es gibt. Erst danach neu zu laden hiesse, die Beschreibung gegen den Bestand von
+        # gestern zu pruefen — eine frisch angelegte Plugin-Datei waere „unbekannter Typ".
+        plugin.registry.lade(self.custom_widgets)
         try:
             neu = lade(self.pfad)
         except ConfigError as e:
@@ -87,8 +94,10 @@ class AppState:
                          for p in neu.panels}
         self.ladefehler = ""
         self.starte_displays()
-        _LOG.info("Beschreibung neu geladen: %d Anzeige(n), %d Schriften, %d Symbole",
-                  len(neu.panels), len(self.fonts.namen()), len(self.icons.namen()))
+        _LOG.info("Beschreibung neu geladen: %d Anzeige(n), %d Schriften, %d Symbole, "
+                  "%d eigene(r) Widget-Typ(en)",
+                  len(neu.panels), len(self.fonts.namen()), len(self.icons.namen()),
+                  len(plugin.registry.namen()))
         return True
 
 
@@ -133,6 +142,16 @@ async def main() -> int:
     # Jetzt: ohne Anzeigen starten, den Fehler festhalten, Oberflaeche hoch. Der
     # Konfigurator liest die Datei roh (nicht ueber diese Pruefung) — man kann sie also
     # bearbeiten und mit „Neu laden" wieder in Gang bringen, ohne die App anzufassen.
+    # Eigene Widget-Typen VOR der Beschreibung laden — sie entscheiden mit, welche Typen
+    # gueltig sind. Ladefehler einzelner Dateien halten die App nicht auf; sie stehen im
+    # Protokoll und gehen ueber das Schema an den Konfigurator.
+    custom_widgets = bool(opt.get("custom_widgets", False))
+    plugin.registry.lade(custom_widgets)
+    if custom_widgets:
+        _LOG.info("Eigene Widget-Typen aus %s: %s",
+                  anzeige_pfad(plugin.registry.verzeichnis),
+                  ", ".join(plugin.registry.namen()) or "keine")
+
     ladefehler = ""
     try:
         cfg = lade(pfad)
@@ -167,7 +186,7 @@ async def main() -> int:
     anmeldung = Anmeldung(INGRESS_PORT)
     await anmeldung.anmelden()
 
-    zustand = AppState(cfg, pfad, ha, fonts, icons, katalog)
+    zustand = AppState(cfg, pfad, ha, fonts, icons, katalog, custom_widgets)
     zustand.ladefehler = ladefehler
     zustand.displays = {p.id: Display(p, ha, fonts, icons) for p in cfg.panels}
 
@@ -176,7 +195,14 @@ async def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, ende.set)
 
-    async with aiohttp.ClientSession() as session:
+    # ⚠ Ohne eigenen Wert gilt aiohttps Vorgabe von FUENF MINUTEN fuer die Gesamtdauer.
+    # Bisher rettete nur, dass ein stromloses Geraet schon nach ~3 s vom Betriebssystem
+    # als unerreichbar gemeldet wird (im Protokoll gemessen). Ein Geraet, das den Port
+    # offen hat und dann haengt — ein bootender ESP32 zum Beispiel —, koennte einen Takt
+    # dagegen minutenlang festhalten. Die Werte sind fuer ein LAN grosszuegig: das
+    # groesste Bild sind 34 kB in sieben Bloecken.
+    zeitgrenzen = aiohttp.ClientTimeout(total=10, connect=4, sock_read=5)
+    async with aiohttp.ClientSession(timeout=zeitgrenzen) as session:
         zustand.session = session
         ha_aufgabe = asyncio.create_task(ha.run(), name="hass")
         zustand.starte_displays()

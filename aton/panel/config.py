@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from . import schema
+from . import plugin, schema
 from .const import DEFAULT_COLOR, DEFAULT_FONT, DEFAULT_INTERVAL
 
 _LOG = logging.getLogger("panel.config")
@@ -82,6 +82,29 @@ class Widget:
     align: str = "left"
     # nur type=image
     image: str | None = None
+    # Zeichenebene. Alles steht auf 0 und wird in Listenreihenfolge gezeichnet; wer hoeher
+    # steht, kommt spaeter dran und liegt damit oben. Braucht vor allem die Meldezeile:
+    # sie muss ueber den Screen-Gruppen liegen, egal in welcher Liste sie steht.
+    layer: int = 0
+    # Jinja-Bedingung. Trifft sie nicht zu, wird die Kachel uebersprungen.
+    visible_when: str | None = None
+    # nur type=notify
+    notify: NotifyCfg | None = None
+    # nur type=icons/serie: Abstand zwischen zwei Symbolen und feste Zellengroesse.
+    # `line_spacing = None` heisst „wie spacing" — der Renderer setzt das ein.
+    spacing: int = 1
+    line_spacing: int | None = None
+    # nur type=series: Farbe/Schrift je Reihe. Leerer Eintrag = die der Kachel.
+    row_colors: list[str] = field(default_factory=list)
+    row_fonts: list[str] = field(default_factory=list)
+    cell_w: int | None = None
+    cell_h: int | None = None
+    # nur eigene Typen aus /config/aton_widgets: die geprueften Werte der Felder, die das
+    # Plugin selbst angemeldet hat. Bei eingebauten Typen immer leer.
+    optionen: dict[str, Any] = field(default_factory=dict)
+    # Welche davon Entitaeten sind — beim Einlesen einmal ausgerechnet, damit `entities`
+    # ohne Rueckgriff auf die Registry auskommt (der Loader kennt den Typ, das Widget nicht).
+    optionen_entitaeten: set[str] = field(default_factory=set)
     pfad: str = "?"
     # Wurde die Lage ueber `cell` angegeben? Das entscheidet, ob Verschieben im
     # Konfigurator am Raster einrastet oder pixelweise geht.
@@ -96,6 +119,10 @@ class Widget:
             e |= self.text.entities
         if isinstance(self.color, IconSpec):
             e |= self.color.entities
+        for name in self.optionen_entitaeten:
+            wert = self.optionen.get(name)
+            if wert:
+                e.add(str(wert))
         return e
 
 
@@ -136,6 +163,12 @@ class ScreenGroup:
 
 @dataclass
 class NotifyCfg:
+    """Eine Meldezeile. Steht am Widget `type: notify` — und am alten Block `notify:`.
+
+    ★ Der Block ist seit 0.13.0 nur noch eine Schreibweise: `_panel` uebersetzt ihn in ein
+    Widget mit `layer: 1`. Deshalb traegt diese Klasse beides — `region` benutzt nur der
+    Block, Lage und Groesse des Widgets stehen wie bei jeder Kachel in `at`/`size`.
+    """
     region: tuple[int, int, int, int] | None = None
     visible_when: str | None = None
     max_bar_chars: int = 30
@@ -147,6 +180,9 @@ class NotifyCfg:
     scroll_speed: int = 128
     scroll_yoff: int = 128
     scroll_font: int = 128
+    # Welche Meldungen diese Zeile zeigt. `channel=None` ist die Hauptzeile.
+    channel: str | None = None
+    show_levels: set[str] = field(default_factory=set)   # leer = alle
 
 
 @dataclass
@@ -180,12 +216,49 @@ class PanelCfg:
     gate_entity: str | None = None
     gate_fallback: str | None = None
     gate_script: str | None = None
+    #: Wie lange auf ein `on` des Tors gewartet wird, bevor trotzdem einmal gesendet
+    #: wird. Siehe `display.NOTAUSGANG_S` — dort steht, warum es diesen Notausgang gibt.
+    gate_wartezeit: int = 90
     brightness_entity: str | None = None
     brightness_default: int = 128
     grid: Grid = field(default_factory=Grid)
     widgets: list[Widget] = field(default_factory=list)
     groups: list[ScreenGroup] = field(default_factory=list)
     notify: NotifyCfg = field(default_factory=NotifyCfg)
+    # Aus dem alten `notify:`-Block erzeugte Kacheln. Sie stehen BEWUSST nicht in
+    # `widgets`: dort zaehlt der Listenindex als Pfad in die YAML-Datei
+    # (`panels[0].widgets[3]`), und ein Eintrag ohne Entsprechung in der Datei wuerde den
+    # Konfigurator auf eine Kachel zeigen lassen, die es dort gar nicht gibt.
+    overlays: list[Widget] = field(default_factory=list)
+
+    @property
+    def meldezeilen(self) -> list[Widget]:
+        """Alle Meldezeilen der Anzeige — aus dem Grundbild, den Screens und dem Block."""
+        return [w for w in self.alle_widgets() if w.type == "notify"]
+
+    def alle_widgets(self) -> list[Widget]:
+        """Jede Kachel der Anzeige, unabhaengig davon, welcher Screen gerade laeuft."""
+        alle = list(self.widgets)
+        for g in self.groups:
+            for s in g.screens:
+                for seite in s.seiten:
+                    alle.extend(seite.widgets)
+        alle.extend(self.overlays)
+        return alle
+
+    @property
+    def notify_levels(self) -> set[str]:
+        """Stufen, die `aton.notify` annimmt — die Vereinigung ueber alle Meldezeilen.
+
+        ⚠ Nicht die Stufen EINER Zeile: eine Meldung darf eine Stufe tragen, die nur eine
+        zweite Zeile kennt. Ohne Meldezeile bleiben die eingebauten beiden uebrig, sonst
+        laesse sich an eine noch nicht eingerichtete Anzeige gar nichts schicken.
+        """
+        stufen: set[str] = set()
+        for w in self.meldezeilen:
+            if w.notify:
+                stufen |= set(w.notify.levels)
+        return stufen or {"info", "warning"}
 
     @property
     def entities(self) -> set[str]:
@@ -289,9 +362,16 @@ def _umbenannt(d: dict, gruppe: str, pfad: str, **kontext) -> dict:
         except (TypeError, ValueError) as e:
             raise ConfigError(pfad, f"{alt!r} (veraltet) laesst sich nicht nach "
                                     f"{neu_name!r} uebernehmen: {e}")
-        _LOG.warning("%s: %r heisst jetzt %r (Wert uebernommen: %r) — beim naechsten "
+        # ⚠ Den Wert nur ANDEUTEN. Bei `wechsel_s` war er eine Zahl, seit 0.17.0 faellt
+        # auch `seiten:` hierher — und das ist die komplette Seitenliste mit allen
+        # Kacheln. Ausgeschrieben stand danach eine Bildschirmseite YAML im Protokoll,
+        # in der die eigentliche Meldung unterging.
+        wert = d[neu_name]
+        kurz = (f"{len(wert)} Eintraege" if isinstance(wert, (list, dict))
+                else repr(wert)[:60])
+        _LOG.warning("%s: %r heisst jetzt %r (%s uebernommen) — beim naechsten "
                      "Speichern im Konfigurator wird es umgeschrieben",
-                     pfad, alt, neu_name, d[neu_name])
+                     pfad, alt, neu_name, kurz)
     return d
 
 
@@ -390,16 +470,105 @@ def _icon_spec(wert: Any, pfad: str) -> IconSpec:
 
 WIDGET_SCHLUESSEL = schema.WIDGET_KEYS
 
-TYPEN = set(schema.WIDGET_TYPEN)
+EINGEBAUTE_TYPEN = set(schema.WIDGET_TYPEN)
+
+
+def typen() -> set[str]:
+    """Alle gerade gueltigen Widget-Typen — eingebaute plus geladene eigene.
+
+    ⚠ Eine Funktion und keine Konstante: die eigenen Typen stehen erst fest, wenn
+    `plugin.registry.lade()` gelaufen ist, und sie aendern sich bei „Neu laden". Eine
+    Momentaufnahme beim Import waere immer leer.
+    """
+    return EINGEBAUTE_TYPEN | set(plugin.registry.namen())
+
+
+def _plugin_wert(roh: Any, f: schema.Feld, pfad: str) -> Any:
+    """Einen Wert fuer ein vom Plugin angemeldetes Feld pruefen und umrechnen."""
+    if f.art == "int":
+        wert: Any = _int(roh, pfad)
+    elif f.art == "float":
+        try:
+            wert = float(roh)
+        except (TypeError, ValueError):
+            raise ConfigError(pfad, f"keine Zahl: {roh!r}") from None
+    elif f.art == "bool":
+        if not isinstance(roh, bool):
+            raise ConfigError(pfad, f"true oder false erwartet, nicht {roh!r}")
+        wert = roh
+    elif f.art == "farbe":
+        wert = _farbe(roh, pfad)
+    elif f.art == "auswahl":
+        wert = str(roh)
+        if wert not in f.optionen:
+            raise ConfigError(pfad, f"unbekannt: {wert!r} — erlaubt: {', '.join(f.optionen)}")
+    else:
+        # text, entitaet, schrift, symbol, vorlage, format — alles Zeichenketten
+        wert = str(roh)
+
+    if f.art in ("int", "float"):
+        if f.min is not None and wert < f.min:
+            raise ConfigError(pfad, f"{wert} ist kleiner als {f.min}")
+        if f.max is not None and wert > f.max:
+            raise ConfigError(pfad, f"{wert} ist groesser als {f.max}")
+    return wert
+
+
+def _plugin_werte(d: dict, eigen, pfad: str) -> dict[str, Any]:
+    werte: dict[str, Any] = {}
+    for f in eigen.felder:
+        if f.name not in d:
+            if f.pflicht:
+                raise ConfigError(f"{pfad}.{f.name}",
+                                  f"fehlt — type: {eigen.name} braucht es ({eigen.quelle})")
+            if f.vorgabe is not None:
+                werte[f.name] = f.vorgabe
+            continue
+        werte[f.name] = _plugin_wert(d[f.name], f, f"{pfad}.{f.name}")
+    return werte
 
 
 def _widget(wert: Any, pfad: str, grid: Grid, vorgabe_font: str, vorgabe_farbe: str) -> Widget:
     d = _dict(wert, pfad)
-    _unbekannt(d, WIDGET_SCHLUESSEL, pfad)
 
+    # ★ Der Typ wird VOR den Schluesseln geprueft, nicht danach: welche Schluessel erlaubt
+    # sind, haengt bei eigenen Typen am Typ selbst. Nebenwirkung, die so gewollt ist — wer
+    # sich beim Typ vertippt, liest jetzt „unbekannter Typ" statt einer Liste unbekannter
+    # Schluessel, die nur die Folge davon ist.
     typ = str(d.get("type", "tile"))
-    if typ not in TYPEN:
-        raise ConfigError(f"{pfad}.type", f"unbekannt: {typ!r} — erlaubt: {', '.join(sorted(TYPEN))}")
+    # ⚠ Vor allem anderen: ein veralteter Typname wird auf den aktuellen umgeschrieben.
+    # Sonst scheitert die Pruefung unten mit „unbekannter Typ" an etwas, das gestern noch
+    # richtig war — dieselbe Ueberlegung wie bei den Schluesselnamen (`_umbenannt`).
+    if typ in schema.TYP_UMBENANNT:
+        _LOG.info("%s: type %r heisst jetzt %r — bitte bei Gelegenheit umschreiben",
+                  pfad, typ, schema.TYP_UMBENANNT[typ])
+        typ = schema.TYP_UMBENANNT[typ]
+    eigen = plugin.registry.get(typ)
+    if eigen is None and typ not in EINGEBAUTE_TYPEN:
+        alle = typen()
+        hinweis = ""
+        if not plugin.registry.aktiv:
+            hinweis = (" — eigene Typen aus /config/aton_widgets sind aus, siehe "
+                       "App-Option 'custom_widgets'")
+        raise ConfigError(f"{pfad}.type",
+                          f"unbekannt: {typ!r} — erlaubt: {', '.join(sorted(alle))}{hinweis}")
+
+    erlaubt = WIDGET_SCHLUESSEL | (eigen.schluessel if eigen else set())
+    ueber = set(d) - erlaubt
+    if ueber:
+        # ★ Der haeufigste Fall ist kein Tippfehler, sondern ein TYPWECHSEL: `sensor:` von
+        # einem `bargraph` blieb stehen, und `clock` kennt ihn nicht. Ohne diesen Zusatz
+        # liest man „unbekannter Schluessel" und sucht einen Vertipper, den es nicht gibt —
+        # den Schluessel hat nie jemand hingeschrieben.
+        herkunft = {n: t for n in sorted(ueber)
+                    if (t := plugin.registry.typ_von_schluessel(n)) and t != typ}
+        zusatz = ""
+        if herkunft:
+            teile = ", ".join(f"{n} gehoert zu type: {t}" for n, t in herkunft.items())
+            zusatz = (f" — {teile}. Beim Wechsel des Typs bleiben die Schluessel des alten "
+                      "stehen; hier sind sie zu loeschen")
+        raise ConfigError(pfad, "unbekannte Schluessel: " + ", ".join(sorted(ueber))
+                          + zusatz + " — erlaubt sind: " + ", ".join(sorted(erlaubt)))
 
     # Lage: entweder absolut (at) oder ueber das Raster (cell)
     if "at" in d and "cell" in d:
@@ -440,6 +609,8 @@ def _widget(wert: Any, pfad: str, grid: Grid, vorgabe_font: str, vorgabe_farbe: 
         font=str(d.get("font", vorgabe_font)),
         align=str(d.get("align", "left")),
         image=d.get("image"),
+        layer=_int(d.get("layer", 0), f"{pfad}.layer"),
+        visible_when=d.get("visible_when"),
         pfad=pfad,
         cell_benutzt=ueber_zelle,
     )
@@ -468,6 +639,41 @@ def _widget(wert: Any, pfad: str, grid: Grid, vorgabe_font: str, vorgabe_farbe: 
         raise ConfigError(pfad, "type: text braucht 'text', 'value' oder 'template'")
     if typ == "image" and not widget.image:
         raise ConfigError(pfad, "type: image braucht 'image' (Dateiname in aton_icons)")
+
+    if typ in ("icons", "series"):
+        widget.spacing = _int(d.get("spacing", 1), f"{pfad}.spacing")
+        if "line_spacing" in d:
+            widget.line_spacing = _int(d["line_spacing"], f"{pfad}.line_spacing")
+        if "cell_size" in d:
+            groesse = _liste(d["cell_size"], f"{pfad}.cell_size")
+            if len(groesse) != 2:
+                raise ConfigError(f"{pfad}.cell_size", "muss [breite, hoehe] sein")
+            widget.cell_w = _int(groesse[0], f"{pfad}.cell_size[0]")
+            widget.cell_h = _int(groesse[1], f"{pfad}.cell_size[1]")
+        if not widget.text:
+            quelle = ("die Symbolnamen" if typ == "icons"
+                      else "die Spalten (Reihen durch `|`, `@name` ist ein Symbol)")
+            raise ConfigError(pfad, f"type: {typ} braucht eine Textquelle, die {quelle} "
+                                    "liefert — 'template', 'value' oder 'text'")
+
+    if typ == "series":
+        # ⚠ Farben HIER pruefen, nicht erst beim Zeichnen: eine krumme Farbe wuerde sonst
+        # jeden Frame eine Ausnahme werfen und die Kachel kosten, ohne zu sagen, wo sie
+        # steht. Der Pfad in der Meldung nennt die Stelle in der YAML.
+        widget.row_colors = [(_farbe(t, f"{pfad}.row_colors[{i}]") if t else "")
+                             for i, t in enumerate(_liste_oder_kommaliste(
+                                 d.get("row_colors"), f"{pfad}.row_colors"))]
+        widget.row_fonts = _liste_oder_kommaliste(d.get("row_fonts"), f"{pfad}.row_fonts")
+
+    if typ == "notify":
+        # Der Text kommt aus der MELDUNG, nicht aus der Beschreibung. `text:`/`value:`
+        # duerfen trotzdem dastehen und werden ignoriert — wie `icon:` an einer Uhr. Sie
+        # abzulehnen machte jeden Typwechsel zur Sackgasse (siehe 0.12.5/0.12.6).
+        widget.notify = _meldung(d, pfad, vorgabe_font)
+
+    if eigen:
+        widget.optionen = _plugin_werte(d, eigen, pfad)
+        widget.optionen_entitaeten = set(eigen.entitaets_felder)
     return widget
 
 
@@ -497,22 +703,22 @@ def _screen_group(wert: Any, pfad: str, grid: Grid, font: str, farbe: str,
         if isinstance(when, str) and when.strip().lower() in ("always", "immer"):
             when = None
 
-        if "seiten" in sd:
+        if "pages" in sd:
             if "widgets" in sd:
-                raise ConfigError(sp, "entweder `widgets:` oder `seiten:` — nicht beides. "
+                raise ConfigError(sp, "entweder `widgets:` oder `pages:` — nicht beides. "
                                       "Die Kacheln gehoeren dann in die erste Seite")
             seiten = []
-            for j, roh in enumerate(_liste(sd["seiten"], f"{sp}.seiten")):
-                pp = f"{sp}.seiten[{j}]"
-                pd = _dict(roh, pp)
+            for j, roh in enumerate(_liste(sd["pages"], f"{sp}.pages")):
+                pp = f"{sp}.pages[{j}]"
+                pd = _umbenannt(_dict(roh, pp), "seite", pp)
                 _unbekannt(pd, schema.SEITE_KEYS, pp)
                 seiten.append(Seite(
                     name=str(pd.get("name", f"Seite {j + 1}")),
                     widgets=_widgets(pd.get("widgets", []), f"{pp}.widgets",
                                      grid, font, farbe),
-                    zyklen=max(0, _int(pd.get("zyklen", 0), f"{pp}.zyklen"))))
+                    zyklen=max(0, _int(pd.get("cycles", 0), f"{pp}.cycles"))))
             if not seiten:
-                raise ConfigError(f"{sp}.seiten", "mindestens eine Seite noetig")
+                raise ConfigError(f"{sp}.pages", "mindestens eine Seite noetig")
         else:
             # Der Normalfall bleibt unveraendert: eine Seite, die niemand so nennen muss.
             seiten = [Seite(name=str(_pflicht(sd, "name", sp)),
@@ -523,8 +729,8 @@ def _screen_group(wert: Any, pfad: str, grid: Grid, font: str, farbe: str,
             name=str(_pflicht(sd, "name", sp)),
             when=when,
             seiten=seiten,
-            wechsel_zyklen=max(0, _int(sd.get("wechsel_zyklen", 0),
-                                       f"{sp}.wechsel_zyklen")),
+            wechsel_zyklen=max(0, _int(sd.get("page_cycles", 0),
+                                       f"{sp}.page_cycles")),
         ))
     if not gruppe.screens:
         raise ConfigError(f"{pfad}.screens", "mindestens ein Screen noetig")
@@ -534,11 +740,15 @@ def _screen_group(wert: Any, pfad: str, grid: Grid, font: str, farbe: str,
     return gruppe
 
 
-def _notify(wert: Any, pfad: str, vorgabe_font: str) -> NotifyCfg:
-    d = _dict(wert, pfad)
-    _unbekannt(d, schema.NOTIFY_KEYS, pfad)
+def _meldung(d: dict, pfad: str, vorgabe_font: str) -> NotifyCfg:
+    """Die Einstellungen einer Meldezeile — aus dem Block `notify:` ODER einem Widget.
+
+    ★ Bewusst EINE Funktion fuer beide Schreibweisen: liefe die Auswertung zweimal, waere
+    schon die naechste Vorgabe (`max_bar_chars: 30`) eine Stelle, an der sich Block und
+    Widget unbemerkt unterscheiden koennen. Die Lage kommt von aussen — der Block hat
+    `region`, das Widget `at`/`size`.
+    """
     cfg = NotifyCfg(
-        region=_rechteck(_pflicht(d, "region", pfad), f"{pfad}.region"),
         visible_when=d.get("visible_when"),
         max_bar_chars=_int(d.get("max_bar_chars", 30), f"{pfad}.max_bar_chars"),
         max_chars=_int(d.get("max_chars", 60), f"{pfad}.max_chars"),
@@ -546,6 +756,8 @@ def _notify(wert: Any, pfad: str, vorgabe_font: str) -> NotifyCfg:
         scroll_speed=_int(d.get("scroll_speed", 128), f"{pfad}.scroll_speed"),
         scroll_yoff=_int(d.get("scroll_yoff", 128), f"{pfad}.scroll_yoff"),
         scroll_font=_int(d.get("scroll_font", 128), f"{pfad}.scroll_font"),
+        channel=(str(d["channel"]).strip() or None) if d.get("channel") else None,
+        show_levels=_stufen(d.get("show_levels"), f"{pfad}.show_levels"),
     )
     if "levels" in d:
         stufen = {}
@@ -557,6 +769,51 @@ def _notify(wert: Any, pfad: str, vorgabe_font: str) -> NotifyCfg:
                                  _farbe(ld.get("fg", "ffffff"), f"{lp}.fg"))
         if stufen:
             cfg.levels = stufen
+    if cfg.show_levels - set(cfg.levels):
+        # Ein Filter auf eine Stufe, die diese Zeile gar nicht kennt, laesst sie fuer immer
+        # leer — und das sieht aus wie „die Meldung kam nicht an".
+        raise ConfigError(f"{pfad}.show_levels",
+                          "unbekannte Stufe(n): "
+                          + ", ".join(sorted(cfg.show_levels - set(cfg.levels)))
+                          + " — bekannt sind: " + ", ".join(sorted(cfg.levels)))
+    return cfg
+
+
+def _liste_oder_kommaliste(wert: Any, pfad: str) -> list[str]:
+    """Eine Liste — geschrieben als YAML-Liste ODER als Kommaliste.
+
+    Beides zuzulassen ist kein Luxus: in der YAML liest sich `[ffff00, '', 30c030]`
+    natuerlich, im Formular des Konfigurators gibt es fuer solche Listen kein Feld, dort
+    tippt man `ffff00, , 30c030`. Reihenfolge und leere Eintraege bleiben in beiden Faellen
+    erhalten — die Stelle in der Liste IST die Zuordnung zur Reihe.
+    """
+    if wert is None or wert == "":
+        return []
+    if isinstance(wert, str):
+        return [t.strip() for t in wert.split(",")]
+    if isinstance(wert, list):
+        return [str(t).strip() if t is not None else "" for t in wert]
+    raise ConfigError(pfad, "muss eine Liste oder eine Kommaliste sein, "
+                            f"ist {type(wert).__name__}")
+
+
+def _stufen(wert: Any, pfad: str) -> set[str]:
+    """`show_levels` als Liste oder als Kommaliste — die Oberflaeche schreibt Text."""
+    if wert is None or wert == "":
+        return set()
+    if isinstance(wert, str):
+        return {t.strip() for t in wert.split(",") if t.strip()}
+    if isinstance(wert, list):
+        return {str(t).strip() for t in wert if str(t).strip()}
+    raise ConfigError(pfad, "muss eine Liste oder eine Kommaliste sein, "
+                            f"ist {type(wert).__name__}")
+
+
+def _notify(wert: Any, pfad: str, vorgabe_font: str) -> NotifyCfg:
+    d = _dict(wert, pfad)
+    _unbekannt(d, schema.NOTIFY_KEYS, pfad)
+    cfg = _meldung(d, pfad, vorgabe_font)
+    cfg.region = _rechteck(_pflicht(d, "region", pfad), f"{pfad}.region")
     return cfg
 
 
@@ -611,6 +868,8 @@ def _panel(wert: Any, pfad: str, vorgaben: dict) -> PanelCfg:
         panel.gate_entity = gd.get("entity")
         panel.gate_fallback = gd.get("fallback")
         panel.gate_script = gd.get("script")
+        if "wartezeit" in gd:
+            panel.gate_wartezeit = _int(gd["wartezeit"], f"{pfad}.gate.wartezeit")
     if "brightness" in d:
         bd = _dict(d["brightness"], f"{pfad}.brightness")
         _unbekannt(bd, schema.BRIGHTNESS_KEYS, f"{pfad}.brightness")
@@ -627,7 +886,24 @@ def _panel(wert: Any, pfad: str, vorgaben: dict) -> PanelCfg:
         raise ConfigError(f"{pfad}.screen_groups", "Gruppen-IDs muessen eindeutig sein")
 
     if "notify" in d:
+        # ★ Der Block ist seit 0.13.0 nur noch eine Schreibweise fuer eine Kachel
+        # `type: notify`. Uebersetzt wird HIER, damit es weiter unten nur noch einen Fall
+        # gibt: Renderer, Transport und die Stufenpruefung kennen ausschliesslich
+        # Meldezeilen-Widgets. `panel.notify` bleibt daneben stehen — der Konfigurator
+        # zeichnet daraus den Bereich in der Vorschau und bietet den Block zum Bearbeiten
+        # an, solange er in der Datei steht.
         panel.notify = _notify(d["notify"], f"{pfad}.notify", font)
+        x, y, w, h = panel.notify.region
+        panel.overlays.append(Widget(
+            type="notify", x=x, y=y, w=w, h=h,
+            font=panel.notify.font,
+            visible_when=panel.notify.visible_when,
+            # Ueber allem: der Block lag im Renderer schon immer nach den Screen-Gruppen,
+            # und genau das muss die Uebersetzung erhalten.
+            layer=1,
+            notify=panel.notify,
+            pfad=f"{pfad}.notify",
+        ))
 
     # Liegt alles im Bild?
     for g in panel.groups:

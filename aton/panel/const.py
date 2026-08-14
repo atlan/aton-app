@@ -24,6 +24,9 @@ WWW_DIR = os.path.join(APP_DIR, "www")
 # --- Vom Benutzer befuellbar ----------------------------------------------
 USER_FONT_DIR = os.path.join(HA_CONFIG_DIR, "aton_fonts")
 USER_ICON_DIR = os.path.join(HA_CONFIG_DIR, "aton_icons")
+# ⚠ Anders als die beiden darueber: hier liegt ausfuehrbarer Code. Gelesen wird der Ordner
+# nur, wenn die Add-on-Option `custom_widgets` gesetzt ist — siehe plugin.py.
+USER_WIDGET_DIR = os.path.join(HA_CONFIG_DIR, "aton_widgets")
 
 
 def anzeige_pfad(pfad: str) -> str:

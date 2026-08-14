@@ -18,9 +18,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from .api import MatrixPanelApi, MatrixPanelError
-from .const import (ATTR_DURATION, ATTR_ID, ATTR_LEVEL, ATTR_PANEL, ATTR_PRIORITY,
-                    ATTR_TEXT, CONF_HOST, CONF_PORT, DOMAIN, SERVICE_NOTIFY,
-                    SERVICE_NOTIFY_CLEAR)
+from .const import (ATTR_CHANNEL, ATTR_DURATION, ATTR_ID, ATTR_LEVEL, ATTR_PANEL,
+                    ATTR_PRIORITY, ATTR_TEXT, CONF_HOST, CONF_PORT, DOMAIN,
+                    SERVICE_NOTIFY, SERVICE_NOTIFY_CLEAR)
 from .coordinator import MatrixPanelCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,11 +40,15 @@ NOTIFY_SCHEMA = vol.Schema({
     vol.Optional(ATTR_DURATION, default=30): vol.All(vol.Coerce(float), vol.Range(min=0)),
     vol.Optional(ATTR_ID): cv.string,
     vol.Optional(ATTR_PRIORITY): vol.All(vol.Coerce(int), vol.Range(min=1, max=9)),
+    # In welche Meldezeile. Bewusst KEINE feste Auswahl: die Kanaele stehen in der YAML
+    # der App, nicht hier — eine Liste an dieser Stelle liefe der Beschreibung hinterher.
+    vol.Optional(ATTR_CHANNEL): cv.string,
     vol.Optional(ATTR_PANEL): cv.string,
 })
 
 NOTIFY_CLEAR_SCHEMA = vol.Schema({
     vol.Optional(ATTR_ID): cv.string,
+    vol.Optional(ATTR_CHANNEL): cv.string,
     vol.Optional(ATTR_PANEL): cv.string,
 })
 
@@ -119,7 +123,8 @@ def _dienste_anmelden(hass: HomeAssistant) -> None:
     async def notify_clear(call: ServiceCall) -> None:
         for coordinator, pid in _ziele(call.data.get(ATTR_PANEL)):
             try:
-                await coordinator.api.notiz_loeschen(pid, call.data.get(ATTR_ID))
+                await coordinator.api.notiz_loeschen(pid, call.data.get(ATTR_ID),
+                                                     call.data.get(ATTR_CHANNEL))
             except MatrixPanelError as err:
                 raise HomeAssistantError(f"Loeschen an {pid} gescheitert: {err}") from err
             await coordinator.async_request_refresh()

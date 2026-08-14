@@ -125,6 +125,13 @@
                       background: #0d1013; }
 .k-symbolgitter img:hover { border-color: #4a7fb5; }
 .k-symbolgitter img.aktiv { border-color: #7ab8ff; background: #1f3a52; }
+/* „kein Symbol" — sieht aus wie eine Symbolkachel, damit die Reihe nicht springt. */
+.k-symbolgitter .k-leer { width: 40px; height: 40px; padding: 2px; border: 1px solid #2a3138;
+                          border-radius: 5px; cursor: pointer; background: #0d1013;
+                          color: #6b7681; font-size: 18px; user-select: none;
+                          display: flex; align-items: center; justify-content: center; }
+.k-symbolgitter .k-leer:hover { border-color: #4a7fb5; }
+.k-symbolgitter .k-leer.aktiv { border-color: #7ab8ff; background: #1f3a52; color: #cfe6ff; }
 
 .k-reiter { display: flex; gap: 4px; margin-bottom: 16px; }
 .k-reiter button {

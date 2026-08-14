@@ -12,7 +12,7 @@ in der Oberfläche als eigener Baustein behandelt und ist hier nur als Art verme
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -28,6 +28,13 @@ class Feld:
     min: float | None = None
     max: float | None = None
     einheit: str = ""
+    # Nur bei diesen Widget-Typen im Formular zeigen. Leer = bei allen.
+    #
+    # ⚠ Das ist eine Angabe fuer die OBERFLAECHE, keine Pruefregel: `WIDGET_KEYS` bleibt
+    # eine flache Menge, und der Loader nimmt `image:` auch an einer Uhr an. Absichtlich
+    # so — eine typgebundene Pruefung wuerde jeden Typwechsel zur Sackgasse machen
+    # (siehe 0.12.5), und genau das war schon einmal der Fehler.
+    nur_typ: list[str] = field(default_factory=list)
 
     def als_dict(self) -> dict:
         d = {"name": self.name, "art": self.art, "label": self.label}
@@ -39,6 +46,8 @@ class Feld:
             d["vorgabe"] = self.vorgabe
         if self.optionen:
             d["optionen"] = self.optionen
+        if self.nur_typ:
+            d["nur_typ"] = self.nur_typ
         for k in ("min", "max"):
             if getattr(self, k) is not None:
                 d[k] = getattr(self, k)
@@ -105,8 +114,16 @@ GATE: list[Feld] = [
     Feld("entity", "entitaet", "Tor",
          "WLEDs Hauptschalter — der echte Aus-Schalter der Anzeige"),
     Feld("fallback", "entitaet", "Rückfall",
-         "Gilt nur, wenn das Tor gar nicht existiert oder unavailable meldet. Ohne diesen "
-         "Rückfall käme der Renderer nach einem Segmentverlust nie wieder in Gang"),
+         "Gilt nur, wenn das Tor gar nicht existiert oder unavailable meldet, und nur für "
+         "die Frage „an oder aus“. Ohne diesen Rückfall käme der Renderer nach einem "
+         "Segmentverlust nie wieder in Gang. Gesendet wird trotzdem erst, wenn das Tor "
+         "selbst antwortet — sonst schriebe Aton in die Bootzeit des Geräts hinein"),
+    Feld("wartezeit", "int", "Wartezeit auf das Tor",
+         "Gesendet wird erst, wenn das Tor „on“ meldet: HA setzt es genau dann, wenn es "
+         "mit dem Gerät spricht. So lange wird darauf gewartet, bevor es trotzdem einmal "
+         "versucht wird — dieser eine Versuch löst den Segmentverlust auf. Gemessene "
+         "Hochläufe lagen zwischen 18 und 95 s",
+         vorgabe=90, min=0, max=600, einheit="s"),
     Feld("script", "entitaet", "Schaltskript",
          "Was der An/Aus-Schalter im Betrieb auslöst. Leer = Tor bzw. Rückfall direkt "
          "schalten. Ein Skript ist dort nötig, wo mehr passieren muss als Strom an: "
@@ -128,19 +145,33 @@ GRID: list[Feld] = [
          einheit="px"),
 ]
 
-NOTIFY: list[Feld] = [
-    Feld("region", "rechteck", "Bereich", "x, y, Breite, Höhe der Meldezeile", pflicht=True),
-    Feld("visible_when", "vorlage", "Sichtbar wenn",
-         "Jinja-Bedingung, z.B. nur bei Anwesenheit im Raum"),
+# Was eine Meldezeile ausmacht — geteilt zwischen dem alten `notify:`-Block und dem
+# Widget-Typ `notify`. EINE Liste, damit beide Schreibweisen dieselben Grenzen und
+# dieselben Vorgaben haben; zwei Listen wären zwei Wahrheiten.
+MELDUNG: list[Feld] = [
     Feld("max_bar_chars", "int", "Balken bis",
          "Längerer Text läuft als WLED-Laufschrift", vorgabe=30, min=1, max=200),
     Feld("max_chars", "int", "Höchstlänge", vorgabe=60, min=1, max=255),
-    Feld("font", "schrift", "Schrift"),
     Feld("scroll_speed", "int", "Lauftempo", vorgabe=128, min=0, max=255),
     Feld("scroll_yoff", "int", "Y-Versatz", "128 = mittig im 8-px-Streifen",
          vorgabe=128, min=0, max=255),
     Feld("scroll_font", "int", "WLED-Schrift", "128 = 6x8", vorgabe=128, min=0, max=255),
 ]
+
+
+def _nur(felder: list[Feld], *typen: str) -> list[Feld]:
+    """Dieselben Felder, im Formular aber nur bei diesen Widget-Typen."""
+    return [replace(f, nur_typ=list(typen)) for f in felder]
+
+
+# Der alte Block `notify:` je Anzeige. Bleibt erlaubt und wird beim Laden in ein Widget
+# übersetzt (config.py) — deshalb steht hier weiterhin `region` statt `at`/`size`.
+NOTIFY: list[Feld] = [
+    Feld("region", "rechteck", "Bereich", "x, y, Breite, Höhe der Meldezeile", pflicht=True),
+    Feld("visible_when", "vorlage", "Sichtbar wenn",
+         "Jinja-Bedingung, z.B. nur bei Anwesenheit im Raum"),
+    Feld("font", "schrift", "Schrift"),
+] + MELDUNG
 
 SCREEN_GROUP: list[Feld] = [
     Feld("id", "text", "Kennung", "Wird Teil der Entity-ID der Auswahl", pflicht=True),
@@ -153,7 +184,7 @@ SCREEN: list[Feld] = [
     Feld("name", "text", "Name", "Erscheint als Stellung in der Auswahl", pflicht=True),
     Feld("when", "vorlage", "Bedingung",
          "Jinja. Der erste Screen, dessen Bedingung zutrifft, gewinnt. Leer = Rückfall"),
-    Feld("wechsel_zyklen", "int", "Seiten wechseln alle",
+    Feld("page_cycles", "int", "Seiten wechseln alle",
          "Hat der Screen mehrere Seiten, wechseln sie sich ab. 0 = nur die erste. "
          "Ein Zyklus ist ein Bildtakt (interval)",
          vorgabe=0, min=0, max=1000, einheit="Zyklen"),
@@ -164,13 +195,14 @@ SCREEN: list[Feld] = [
 # die waeren zwei Stellungen, und eine Handauswahl haette den Wechsel angehalten.
 SEITE: list[Feld] = [
     Feld("name", "text", "Name", "Nur zur Orientierung im Konfigurator"),
-    Feld("zyklen", "int", "Diese Seite steht",
+    Feld("cycles", "int", "Diese Seite steht",
          "Eigene Standzeit nur für diese Seite. 0 = so lange wie im Screen eingestellt. "
          "Damit steht eine Seite länger als die andere",
          vorgabe=0, min=0, max=1000, einheit="Zyklen"),
 ]
 
-WIDGET_TYPEN = ["tile", "text", "icon", "image", "rect", "calendar", "clock"]
+WIDGET_TYPEN = ["tile", "text", "icon", "image", "rect", "calendar", "clock", "clock_wd",
+                "notify", "icons", "series"]
 
 WIDGET: list[Feld] = [
     Feld("type", "auswahl", "Typ", vorgabe="tile", optionen=WIDGET_TYPEN),
@@ -187,8 +219,38 @@ WIDGET: list[Feld] = [
          optionen=["left", "center", "right"]),
     Feld("text_at", "punkt", "Textfeld an", "Eigene Position statt der Rasterposition"),
     Feld("text_width", "int", "Textbreite", einheit="px", min=1, max=1024),
-    Feld("image", "symbol", "Bilddatei", "PNG aus /homeassistant/aton_icons"),
-]
+    Feld("image", "symbol", "Bilddatei", "PNG aus /homeassistant/aton_icons",
+         nur_typ=["image"]),
+    Feld("layer", "int", "Ebene",
+         "Höhere Ebene wird später gezeichnet, liegt also oben. Kacheln des Grundbilds "
+         "und der Screens stehen auf 0; eine Meldezeile gehört über beide", vorgabe=0,
+         min=0, max=9),
+    Feld("visible_when", "vorlage", "Sichtbar wenn",
+         "Jinja-Bedingung. Trifft sie nicht zu, wird die Kachel übersprungen"),
+    Feld("channel", "text", "Kanal",
+         "Nur Meldungen dieses Kanals. Leer = Hauptzeile: zeigt alle Meldungen ohne Kanal "
+         "— und solche, für deren Kanal es keine Zeile gibt, damit nichts still verschwindet",
+         nur_typ=["notify"]),
+    Feld("show_levels", "text", "Nur Stufen",
+         "Kommaliste, z.B. 'warning'. Leer = alle Stufen", nur_typ=["notify"]),
+    Feld("spacing", "int", "Abstand waagerecht",
+         "Pixel zwischen zwei Symbolen bzw. Spalten", vorgabe=1,
+         min=0, max=32, einheit="px", nur_typ=["icons", "serie"]),
+    Feld("line_spacing", "int", "Abstand senkrecht",
+         "Pixel zwischen den Reihen: bei `serie` zwischen Beschriftung, Symbol und "
+         "Beschriftung, bei `icons` zwischen umgebrochenen Zeilen. Leer = derselbe Wert "
+         "wie waagerecht", min=0, max=32, einheit="px", nur_typ=["icons", "serie"]),
+    Feld("row_colors", "text", "Farbe je Reihe",
+         "Kommaliste, eine Farbe je Reihe: `ffff00, , 30c030`. Leerer Eintrag oder "
+         "fehlende Angabe = Farbe der Kachel", nur_typ=["series"]),
+    Feld("row_fonts", "text", "Schrift je Reihe",
+         "Kommaliste, eine Schrift je Reihe: `, , spleen-5x8`. Leerer Eintrag oder "
+         "fehlende Angabe = Schrift der Kachel", nur_typ=["series"]),
+    Feld("cell_size", "groesse", "Zellengröße",
+         "Feste Breite × Höhe je Symbol bzw. Spalte. Leer = größtes vorkommendes; damit "
+         "stehen die Spalten auch bei unterschiedlich breitem Inhalt sauber untereinander",
+         nur_typ=["icons", "serie"]),
+] + _nur(MELDUNG, "notify")
 
 # Die Textquelle ist ein eigener Baustein: genau eine der drei Quellen, dazu Formatierung.
 TEXTQUELLE: list[Feld] = [
@@ -218,10 +280,13 @@ BRIGHTNESS_KEYS = _namen(BRIGHTNESS)
 GRID_KEYS = _namen(GRID)
 NOTIFY_KEYS = _namen(NOTIFY) | {"levels"}
 SCREEN_GROUP_KEYS = _namen(SCREEN_GROUP) | {"screens"}
-SCREEN_KEYS = _namen(SCREEN) | {"widgets", "seiten"}
+SCREEN_KEYS = _namen(SCREEN) | {"widgets", "pages"}
 SEITE_KEYS = _namen(SEITE) | {"widgets"}
 TEXT_KEYS = _namen(TEXTQUELLE)
-WIDGET_KEYS = _namen(WIDGET) | TEXT_KEYS
+# `levels` steht nur in der YAML — eine Zuordnung Stufe → zwei Farben lässt sich im
+# Formular nicht sinnvoll abbilden, und die Vorgaben (info grün, warning rot) stimmen fast
+# immer. Beim `notify:`-Block ist es seit jeher genauso.
+WIDGET_KEYS = _namen(WIDGET) | TEXT_KEYS | {"levels"}
 PANEL_KEYS = _namen(PANEL) | {"gate", "brightness", "grid", "widgets", "screen_groups",
                               "notify"}
 WURZEL_KEYS = {"defaults", "fonts", "panels"}
@@ -246,10 +311,23 @@ LEVEL_KEYS = {"bg", "fg"}
 UMBENANNT: dict[str, dict[str, tuple[str, Any]]] = {
     "screen": {
         # 0.5.16 -> 0.5.17: Sekunden wurden zu Zyklen (ein Zyklus = ein Bildtakt).
-        "wechsel_s": ("wechsel_zyklen",
+        "wechsel_s": ("page_cycles",
                       lambda wert, ktx: max(1, round(float(wert) / (ktx.get("interval") or 5)))
                       if float(wert) > 0 else 0),
+        # 0.17.0: die letzten deutschen Schluessel wurden englisch — der Rest der
+        # Beschreibungssprache war es laengst (type/at/size/template/align/spacing).
+        "wechsel_zyklen": ("page_cycles", None),
+        "seiten": ("pages", None),
     },
+    "seite": {
+        "zyklen": ("cycles", None),
+    },
+}
+
+# Umbenannte WIDGET-TYPEN. Eigene Tabelle, weil ein Typ ein WERT ist und kein Schluessel —
+# `UMBENANNT` oben greift nur auf Schluesselnamen.
+TYP_UMBENANNT: dict[str, str] = {
+    "serie": "series",      # 0.17.0
 }
 
 # Weggefallene Felder mit Erklaerung. Ein blosses „unbekannter Schluessel" waere hier
@@ -272,11 +350,18 @@ GRUPPEN = {
 }
 
 
-def als_dict(katalog=None, sprache: str = "de") -> dict:
+def als_dict(katalog=None, sprache: str = "de", eigene: dict[str, dict] | None = None,
+             eigene_fehler: list[str] | None = None) -> dict:
     """Das ganze Schema für die Oberfläche, wahlweise übersetzt.
 
     Ohne Katalog kommen die deutschen Texte aus dieser Datei — sie sind zugleich die
     Rückfallebene, wenn eine Übersetzung eine Zeichenkette nicht kennt.
+
+    `eigene` sind die geladenen Fremdtypen aus `/config/aton_widgets` (Name → Beschreibung
+    samt Feldern). Sie kommen als Parameter herein und nicht über einen Import, damit diese
+    Datei weiterhin nichts kennt außer sich selbst — sie ist die Beschreibung der Felder,
+    nicht deren Verwaltung. Übersetzt werden sie nicht: ihre Texte stehen in der Datei des
+    Benutzers, und ein Katalog dafür wäre ein Katalog ohne Einträge.
     """
     def uebersetzt(gruppe: str, f: Feld) -> dict:
         d = f.als_dict()
@@ -290,8 +375,22 @@ def als_dict(katalog=None, sprache: str = "de") -> dict:
 
     daten = {gruppe: [uebersetzt(gruppe, f) for f in felder]
              for gruppe, felder in GRUPPEN.items()}
+
+    alle_typen = WIDGET_TYPEN + sorted(eigene or {})
+
+    # ★★ Das Auswahlfeld `type` baut die Oberfläche aus DIESER Liste, nicht aus dem
+    # `widget_typen` unten — `feldBauen` in konfigurator.js nimmt `f.optionen` des Feldes.
+    # Ohne diese Zeilen stimmt `widget_typen` zwar, das Klappfeld bleibt aber bei den
+    # eingebauten Typen: der eigene Typ ist im Schema vorhanden und trotzdem nicht
+    # auswählbar. Genau so passiert, und von außen sah es nach einem Zwischenspeicher aus.
+    for f in daten["widget"]:
+        if f["name"] == "type":
+            f["optionen"] = alle_typen
+
     daten.update({
-        "widget_typen": WIDGET_TYPEN,
+        "widget_typen": alle_typen,
+        "widget_eigene": eigene or {},
+        "widget_eigene_fehler": eigene_fehler or [],
         "icon_formen": ["name", "map", "steps", "template"],
     })
     return daten

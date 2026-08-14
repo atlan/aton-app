@@ -63,5 +63,7 @@ class MatrixPanelApi:
     async def notiz(self, panel: str, daten: dict) -> Any:
         return await self._anfrage("POST", f"/api/panel/{panel}/notify", daten)
 
-    async def notiz_loeschen(self, panel: str, kennung: str | None = None) -> None:
-        await self._anfrage("POST", f"/api/panel/{panel}/notify_clear", {"id": kennung})
+    async def notiz_loeschen(self, panel: str, kennung: str | None = None,
+                             kanal: str | None = None) -> None:
+        await self._anfrage("POST", f"/api/panel/{panel}/notify_clear",
+                            {"id": kennung, "channel": kanal})

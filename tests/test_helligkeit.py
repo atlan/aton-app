@@ -49,7 +49,7 @@ def anzeige(entity, ha_ok=True, default=128):
     return d
 
 
-EID = "input_number.entrymatrixbri"
+EID = "input_number.matrix_entry_brightness"
 
 
 def lauf(coro):

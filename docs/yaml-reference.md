@@ -42,7 +42,7 @@ panels:
 
     widgets: [...]         # base image
     screen_groups: [...]   # areas that change
-    notify: {...}          # notification row
+    notify: {...}          # notification row (old form, see below)
 ```
 
 Normally only the **changed** pixels go to the device. Every `full_frame_every` frames a
@@ -61,6 +61,7 @@ gate:
   entity: light.matrix_power     # the real off switch of the display
   fallback: switch.matrix_relay  # applies when the gate does not exist at all
   script: script.toggle_matrix   # optional: what the on/off button triggers
+  wartezeit: 90                  # seconds to wait for the gate before sending anyway
 ```
 
 Without `script` the app switches the gate directly (or the fallback, when the gate is
@@ -72,6 +73,26 @@ WLED's master switch is the real off switch. Home Assistant only creates it whil
 device has **more than one segment**. If the segment list shrinks, it goes `unavailable` —
 and without a fallback nothing would ever be rendered again, even though rendering is
 exactly what restores the segments. Only in that case does the power switch decide.
+
+### Drawing is not sending — `wartezeit`
+
+The fallback answers "may I draw?". Whether the device *answers* is a different question,
+and the gap between them is real: after switching on, mains power is present long before
+WLED is on the network. Measured on one installation: **18 s, 20 s and once 95 s** between
+the power switch and the gate reporting `on`.
+
+Aton therefore sends only once the gate itself reports `on` — Home Assistant sets that
+exactly when it is talking to the device, so the reachability check already exists and
+costs nothing. `wartezeit` (default 90 s) is how long to wait before trying anyway; that
+single attempt is what resolves the segment loss described above. If your boot takes
+longer, raise it — the cost of a value that is too low is one attempt plus a back-off, not
+a broken display.
+
+While the device stays unreachable, Aton backs off (10, 20, 40, 60 s) and keeps
+**rendering** in the normal cycle, so the preview stays live. A frame is abandoned after
+the first block that fails, and an attempt made while the gate does *not* say `on` counts
+as a probe: it sets the reachability state but is not counted as a send error. Only a
+failure while HA considers the device reachable is one.
 
 ⚠ **A fallback that does not exist counts as "off".** If you point `fallback` at an entity
 you have not created yet, nothing is drawn and the panel stays dark. Without any fallback,
@@ -130,7 +151,22 @@ Position either through the grid or absolutely:
 | `image` | PNG from `/homeassistant/aton_icons` |
 | `rect` | filled area (`bg`) |
 | `calendar` | calendar sheet with the day number (9×8) |
-| `clock` | time HH:MM plus a weekday bar |
+| `clock` | time HH:MM |
+| `clock_wd` | time HH:MM plus a weekday bar |
+| `notify` | [message line](#notifications) — empty until something is pending |
+| `icons` | [a list of icons](#icon-lists) from a template, wrapped into the area |
+| `series` | [columns](#column-series) of label / icon / label — an hourly forecast, for example |
+
+Two keys apply to every type:
+
+| Key | Meaning |
+|---|---|
+| `layer` | drawing order. Everything is on 0 and is drawn in list order — base image first, then the screen groups. A higher layer is drawn later and therefore on top |
+| `visible_when` | Jinja condition. If it does not match, the tile is skipped. A broken condition draws the tile and reports the error — a tile missing because of a typo is looked for in the image |
+
+Beyond these you can add your own types as Python files in `/config/aton_widgets` — they
+bring their own keys and their own form in the configurator. See
+[Custom widget types](custom-widgets.md).
 
 ### Text — exactly one source
 
@@ -177,6 +213,102 @@ text_width: 55        # wider than one grid column
 align: left | center | right
 ```
 
+### Icon lists
+
+A row of icons whose *content* comes from a template — status symbols, active rooms,
+whatever the state says:
+
+```yaml
+- type: icons
+  at: [0, 18]
+  size: [64, 18]
+  spacing: 1              # pixels between two icons, horizontally and vertically
+  align: left             # left | center | right
+  template: >-
+    {% for r in ['liv','kit','bat'] if is_state('binary_sensor.' ~ r ~ '_window', 'on') %}
+      r_{{ r }}
+    {% endfor %}
+```
+
+The names come from the **text source** — `template`, `value` or `text` — separated by
+commas or whitespace. So everything text can do works here too, above all Jinja. A list
+without a source is refused when loading; it could never show anything.
+
+- **Wrapping is automatic.** Icons fill left to right and continue on the next row until
+  the height is used up. What does not fit is dropped **and reported** — silently losing
+  icons looks like "the template returns too little".
+- **Columns line up.** All cells are the same size (the widest icon in the list, or
+  `cell_size: [w, h]`), and each icon is centred inside its cell. Without that, one wider
+  icon — `cal` is 9 px, the rest are 8 — would shift everything after it and the second
+  row would sit askew under the first.
+- **A typo costs one icon, not the tile.** An unknown name is skipped and named in the
+  operations tab; with a list from a template that is the normal case, not an exception.
+
+### Column series
+
+Columns of *label, icon, label* — built for an hourly forecast, but not limited to it:
+
+```yaml
+- type: series
+  at: [0, 40]
+  size: [128, 22]
+  spacing: 2
+  align: center
+  template: "14|sol_o|21, 15|wet|20, 16|wet|19, 17|dry|18, 18|dry|17"
+```
+
+Columns are separated by commas, the **rows** of a column by `|`. A part prefixed with
+`@` is an icon, everything else is text — so the template decides the arrangement, not the
+widget:
+
+```
+14|@w_sun|21°     text, icon, text (the hourly forecast)
+Mo|Di             two rows of text
+@w_sun|@w_rain    two rows of icons
+@r_liv|22°        an icon above a label
+@r_liv            a single icon
+```
+
+⚠ **Why the `@` and not "detect it automatically".** Without a marker the renderer would
+have to guess whether `info` means the text or the icon of that name — and drawing a new
+icon could then silently change an existing tile, because a former label suddenly passes
+as an icon name.
+
+Rows are the same height across all columns (the tallest occurrence per row), so mixed
+columns share a baseline. A row nobody uses costs no height.
+
+**Styling per row.** Colour and font are set on the tile, not in the template — the data
+comes from Home Assistant and should not have to carry presentation:
+
+```yaml
+- type: series
+  color: ffffff                          # the tile's default
+  row_colors: [808080, "", ffcc00]       # hour grey, icon row untouched, temperature amber
+  row_fonts: ["", "", spleen-5x8]        # a larger font for the last row
+  template: "{{ state_attr('sensor.aton_forecast','series') }}"
+```
+
+The position in the list is the row. An empty entry — or no entry at all — means "as the
+tile". Both spellings work: a YAML list as above, or a comma list (`808080, , ffcc00`) for
+the configurator's form field, which has no list editor.
+
+A row with a larger font gets more height, so nothing overlaps. An unknown font name costs
+that row's styling, not the tile: it falls back to the tile's font and says so. A malformed
+colour is refused when loading — at draw time it would throw on every frame without saying
+where it stands.
+
+**Why this exists instead of three tiles.** `text` + `icons` + `text` would work, but the
+alignment then hangs on the template padding every label to the same width — and that
+breaks the moment you change the number of columns or the area. Here the columns are flush
+by construction: every cell is the same width (the widest content, or `cell_size`), and
+each part is centred inside it. Wrapping, truncation and the "icon not found" report work
+as they do for [icon lists](#icon-lists).
+
+⚠ **Weather condition icons are not shipped.** The built-in set has `sol_i`, `sol_o`,
+`dry`, `wet`, `lux` and the `wind_*` family — nothing for cloudy, showers, fog or storm.
+Draw them in the *Icons* tab and map the condition to the name in Home Assistant, so the
+name exists in exactly one place.
+
 ## Screen groups
 
 An area whose content is exchanged. Each group becomes a selector
@@ -211,18 +343,18 @@ the rotation.
 
 ```yaml
 - name: Solar
-  wechsel_zyklen: 2          # master switch, and the default per page
-  seiten:
+  page_cycles: 2          # master switch, and the default per page
+  pages:
     - name: Production
-      zyklen: 2              # stays twice as long as the other page
+      cycles: 2              # stays twice as long as the other page
       widgets: [...]
     - name: Strings
-      zyklen: 1
+      cycles: 1
       widgets: [...]
 ```
 
-- `zyklen: 0` (or omitted) means **as long as the screen says**.
-- `wechsel_zyklen: 0` stops the rotation entirely — the first page only — **even if
+- `cycles: 0` (or omitted) means **as long as the screen says**.
+- `page_cycles: 0` stops the rotation entirely — the first page only — **even if
   individual pages carry a number**. Otherwise the documented meaning would be true or
   false depending on what the pages happen to contain.
 - One cycle is one `interval`. At `interval: 5`, two cycles are ten seconds.
@@ -232,15 +364,26 @@ the rotation.
 
 ## Notifications
 
+A message line is a tile like any other — `type: notify`. It draws nothing while no
+message is pending, and the text comes from the service call, not from the description:
+
 ```yaml
-notify:
-  region: [0, 18, 128, 8]
-  visible_when: "{{ is_state('input_text.confirmed_room', 'Living room') }}"
-  max_bar_chars: 30      # longer than that: WLED's own marquee
-  levels:
-    info:    {bg: 00c000, fg: ffffff}
-    warning: {bg: c00000, fg: ffffff}
+widgets:
+  - type: notify
+    at: [0, 18]
+    size: [128, 8]
+    layer: 1               # above the screen groups, see below
+    visible_when: "{{ is_state('input_text.confirmed_room', 'Living room') }}"
+    max_bar_chars: 30      # longer than that: WLED's own marquee
+    levels:
+      info:    {bg: 00c000, fg: ffffff}
+      warning: {bg: c00000, fg: ffffff}
 ```
+
+⚠ **`layer` matters.** Tiles are drawn in the order they appear — base image first, then
+the screen groups. A message line on layer 0 that overlaps a group would be painted over
+by it. `layer: 1` draws later and therefore on top. (The old `notify:` block always
+behaved that way; its translation sets `layer: 1` for you.)
 
 From an automation, through the companion integration's service:
 
@@ -254,6 +397,59 @@ data:
 
 Clear with `aton.notify_clear`; without an `id` everything goes. With several panels the
 field `panel` picks one — without it the call applies to all.
+
+### Several lines: channels and level filters
+
+Every message line without a `channel` is a **main line**. A line with a channel takes
+only messages of that channel:
+
+```yaml
+widgets:
+  - type: notify                 # main line
+    at: [0, 18]
+    size: [128, 8]
+    layer: 1
+  - type: notify                 # warnings only, own place, red
+    at: [0, 54]
+    size: [128, 8]
+    layer: 1
+    channel: warnings
+    show_levels: warning
+```
+
+```yaml
+action: aton.notify
+data:
+  text: Window open, it is freezing
+  level: warning
+  channel: warnings
+```
+
+- A message **without** a channel appears in every line without one.
+- A message **with** a channel appears in the lines carrying it — and, if no line carries
+  it at all, in the main line. A typo in `channel:` must not make the message vanish
+  silently; the operations tab notes it as well.
+- `show_levels` is a comma-separated list (`warning`, or `info, warning`). A level that
+  the line's `levels:` does not define is refused when loading — such a line would stay
+  empty forever.
+- `aton.notify_clear` also takes `channel`: it then clears that channel only.
+- ⚠ **Only one marquee at a time.** WLED scrolls in a single segment
+  (`scroll_segment`), so only the first line whose text exceeds `max_bar_chars` scrolls.
+  The second one says so instead of scrolling silently.
+
+### The old `notify:` block
+
+The per-panel block still works and is translated into the tile above while loading — no
+description needs rewriting:
+
+```yaml
+notify:                    # equivalent to a `type: notify` tile with layer: 1
+  region: [0, 18, 128, 8]
+```
+
+It has no channels, and its position lives in `region:` as numbers rather than being
+draggable in the preview. The configurator offers **Convert to tile** on the notification
+node for exactly that reason.
 
 ## Fonts
 

@@ -114,9 +114,14 @@
     </div>
     <div class="k-feld">
       <h3 id="t-vorschau" data-i18n="ui.vorschau">Vorschau</h3>
+      <!-- ⚠⚠ Diese Meldung steht ÜBER der Buehne, nicht darunter. Darunter war sie bei
+           einem hohen Panel (64x128) unter dem Falz: sichtbar im DOM, unsichtbar am
+           Schirm — und weil die Vorschau bei einem abgelehnten Entwurf einfach das alte
+           Bild behaelt, sah es aus, als passiere gar nichts. Ausgeblendet nimmt sie
+           keinen Platz weg, es kostet also nichts. -->
+      <div class="k-meldung k-fehler" id="k-vorschau-meldung" style="display:none"></div>
       <div class="k-buehne" id="k-buehne"></div>
       <div class="k-hinweis" id="k-hinweis"></div>
-      <div class="k-meldung k-fehler" id="k-vorschau-meldung" style="display:none"></div>
       <div class="k-meldung" id="k-meldung" style="display:none"></div>
     </div>
     <div class="k-feld" id="k-form"></div>
@@ -151,6 +156,11 @@
 const KDa = () => typeof K !== 'undefined';
 const N = (v) => new Intl.NumberFormat(
   (KDa() && K.sprache === "en") ? "en-GB" : "de-DE").format(v);
+/* Unix-Sekunden als Uhrzeit. Der Server schickt Zeitpunkte, keine Dauern — eine Dauer
+   muesste bei jedem Abruf neu gerechnet werden und stuende zwischen zwei Abrufen falsch da. */
+const uhrzeit = (sek) => new Date(sek * 1000).toLocaleTimeString(
+  (KDa() && K.sprache === "en") ? "en-GB" : "de-DE",
+  { hour: "2-digit", minute: "2-digit" });
 
 /* --- Reiter --- */
 const REITER = { betrieb: "tab-betrieb", konfiguration: "tab-konfig", symbole: "tab-symbole" };
@@ -323,7 +333,7 @@ async function betriebHolen(erzwingen = false) {
   const bekannt = new Set(d.panels.map(p => "p-" + p.id));
   [...ziel.children].forEach(k => { if (!bekannt.has(k.id)) k.remove(); });
 
-  d.panels.forEach(p => {
+  d.panels.forEach((p, i) => {
     let el = document.getElementById("p-" + p.id);
     if (!el) {
       el = document.createElement("div");
@@ -339,11 +349,27 @@ async function betriebHolen(erzwingen = false) {
         <div class="werte"></div>
         <div class="fehler" hidden></div>`;
     }
-    // Immer anhaengen, nicht nur beim Anlegen: `appendChild` VERSCHIEBT einen schon
-    // vorhandenen Knoten. So folgt die Reihenfolge der Karten der Beschreibungsdatei,
-    // auch wenn dort umsortiert wurde. Der Knoten selbst bleibt derselbe, Bedienung und
-    // Wahlfelder behalten also ihren Zustand.
-    ziel.appendChild(el);
+    // ★★ NUR verschieben, wenn die Karte tatsaechlich falsch steht.
+    //
+    // Hier stand ein bedingungsloses `ziel.appendChild(el)`, damit die Reihenfolge der
+    // Beschreibungsdatei folgt. Die Absicht stimmt — die Nebenwirkung nicht: `appendChild`
+    // auf einen bereits eingehaengten Knoten LOEST IHN AUS DEM BAUM und haengt ihn neu
+    // ein. Bei 3 s Taktung heisst das: jede Karte wurde 20-mal pro Minute abgerissen und
+    // neu gesetzt. Am 14.08.2026 im Browser des Users mit einem MutationObserver
+    // mitgeschrieben — alle drei Karten, jede Sekunde 40/43/46/49 …:
+    //
+    //     12:40:13  weg p-wohnzimmer · neu p-wohnzimmer · weg p-entry · neu p-entry · …
+    //     12:40:16  dasselbe
+    //     12:40:19  dasselbe
+    //
+    // Der Kommentar behauptete, der Knoten bleibe derselbe und die Bedienung behalte
+    // ihren Zustand. Die Knoten-IDENTITAET bleibt, aber ein Umhaengen nimmt dem Element
+    // den Fokus und laesst die Seite springen — der Regler wurde dem Benutzer also unter
+    // dem Finger weggezogen. Genau das war die Meldung „die Seite springt nach oben".
+    //
+    // `insertBefore` an die richtige Stelle tut im Regelfall NICHTS, sortiert aber
+    // weiterhin um, wenn die Beschreibungsdatei die Reihenfolge aendert.
+    if (ziel.children[i] !== el) ziel.insertBefore(el, ziel.children[i] || null);
     el.querySelector("h2").textContent = p.name;
     el.querySelector(".host").textContent = `${p.host} · ${p.size[0]}×${p.size[1]}`;
     const tor = el.querySelector(".marke");
@@ -356,8 +382,14 @@ async function betriebHolen(erzwingen = false) {
     // Bei ausgeschalteter Anzeige sagt „nicht erreichbar" nichts aus, was „Anzeige aus"
     // nicht schon sagt — und liest sich wie eine Stoerung. Also weglassen.
     netz.hidden = p.probelauf || !p.an;
-    netz.textContent = T(p.erreichbar ? "ui.erreichbar" : "ui.nicht_erreichbar");
+    // Erreichbarkeit ist ein Zustand — mit „seit wann" liest man an EINER Zeile ab,
+    // wie lange es schon so ist. Vorher stand daneben nur ein Vorfallszaehler, der bei
+    // einer ueber Nacht stromlosen Matrix in die Tausende lief.
+    netz.textContent = p.erreichbar
+      ? T("ui.erreichbar")
+      : T("ui.nicht_erreichbar") + (p.unerreichbar_seit ? " " + T("ui.seit") + " " + uhrzeit(p.unerreichbar_seit) : "");
     netz.className = "marke net " + (p.erreichbar ? "an" : "aus");
+    netz.title = p.sendepause || "";
 
     vorschauTauschen(el.querySelector("img"),
                      `api/panel/${p.id}/preview.png?zoom=6&raster=1&t=${Date.now()}`);

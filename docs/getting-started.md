@@ -35,7 +35,7 @@ panels:
     size: [32, 16]
     dry_run: true
     widgets:
-      - type: clock
+      - type: clock_wd
         at: [0, 0]
         size: [32, 8]
       - type: text

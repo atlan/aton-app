@@ -71,6 +71,15 @@ from earlier versions are moved there on first start.
 **Reload** re-reads the file and rebuilds fonts and icons along with it, so new files in
 `aton_fonts` / `aton_icons` are available without restarting the app.
 
+**Outdated names are rewritten on save.** Keys and widget types that were renamed in an
+earlier version (`seiten` → `pages`, `zyklen` → `cycles`, `wechsel_zyklen` → `page_cycles`,
+`type: serie` → `type: series`) keep working when Aton reads them — but the configurator
+shows the *current* name, and a file that says something else is a trap: a tile still
+written as `type: serie` would show the fields of `series` in the form. So the configurator
+migrates them, and it names every place it changed, both when the file is opened and after
+saving. Renaming happens **in place**: the key keeps its position and its comment. Nothing
+is written until you press Save.
+
 ## Language
 
 Top right. Another language is one JSON file in `www/i18n/`; German is the fallback, so a

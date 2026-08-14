@@ -144,9 +144,34 @@ panels:
       - type: calendar
         at: [96, 54]
         size: [9, 8]
-      - type: clock
+      - type: clock_wd
         at: [105, 54]
         size: [23, 8]
+
+      # --------------------------------------------------------------
+      #  Notifications arrive through the `aton.notify` service and appear
+      #  in this strip. It stays empty while nothing is pending; longer text
+      #  scrolls as WLED marquee text.
+      #
+      #  `layer: 1` is not optional here: tiles are drawn in list order, and
+      #  the screen group below covers the same rows. On layer 0 the message
+      #  would be painted over.
+      # --------------------------------------------------------------
+      - type: notify
+        at: [0, 45]
+        size: [128, 8]
+        layer: 1
+        max_bar_chars: 30
+        max_chars: 60
+
+      # A second line, for warnings only. `aton.notify` reaches it with
+      # `channel: warnings` — everything without a channel stays above.
+      - type: notify
+        at: [0, 36]
+        size: [128, 8]
+        layer: 1
+        channel: warnings
+        show_levels: warning
 
     # ----------------------------------------------------------------
     #  Screen groups: an area of the image whose content changes.
@@ -167,10 +192,10 @@ panels:
             # selection in HA still shows just "Solar" — that is what separates
             # them from two screens, where picking one by hand would stop the
             # rotation.
-            wechsel_zyklen: 2          # master switch, and the default per page
-            seiten:
+            page_cycles: 2          # master switch, and the default per page
+            pages:
               - name: Production
-                zyklen: 2              # stays twice as long as the other page
+                cycles: 2              # stays twice as long as the other page
                 widgets:
                   - cell: [3, 0]
                     icon: power_solar
@@ -195,7 +220,7 @@ panels:
                     template: "{{ states('sensor.battery_level') }}%"
 
               - name: Strings
-                zyklen: 1              # half as long as "Production"
+                cycles: 1              # half as long as "Production"
                 widgets:
                   - cell: [3, 0]
                     icon: p1
@@ -226,14 +251,6 @@ panels:
                 value: sensor.bathroom_temperature
                 format: "{:.1f}°C"
 
-    # ----------------------------------------------------------------
-    #  Notifications arrive through the `aton.notify` service and appear
-    #  in this strip. Longer text scrolls as WLED marquee text.
-    # ----------------------------------------------------------------
-    notify:
-      region: [0, 45, 128, 8]
-      max_bar_chars: 30
-      max_chars: 60
 
   # ========================================================================
   #  A small 32x16 panel by the front door — the minimum that makes sense
@@ -249,7 +266,7 @@ panels:
       entity: light.hallway_matrix_power
 
     widgets:
-      - type: clock
+      - type: clock_wd
         at: [0, 0]
         size: [32, 8]
       - type: text

@@ -26,6 +26,7 @@ Panel (a display)
 | [Getting started](docs/getting-started.md) | From installing to the first picture on the matrix |
 | [YAML reference](docs/yaml-reference.md) | Every key, with examples |
 | [The configurator](docs/configurator.md) | Editing without touching the file |
+| [Custom widget types](docs/custom-widgets.md) | Your own widget in Python, in `/config/aton_widgets` |
 | [`aton/DOCS.md`](aton/DOCS.md) | The same reference, shown inside Home Assistant |
 | [`examples/aton.yaml`](examples/aton.yaml) | A complete, commented example to copy |
 

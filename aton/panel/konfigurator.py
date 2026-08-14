@@ -17,7 +17,7 @@ import os
 from aiohttp import web
 from PIL import Image
 
-from . import configfile, schema
+from . import configfile, migration, plugin, schema
 from .config import ConfigError, pruefe
 from .const import UNAVAILABLE_STATES, WWW_DIR, anzeige_pfad, version
 from .fonts import SCHRIFT_VORGABEN
@@ -42,18 +42,25 @@ class KonfiguratorAPI:
             "symbolmarke": _symbolmarke(self.s.icons),
             "sprache": sprache,
             "sprachen": self.s.katalog.sprachen,
-            "schema": schema.als_dict(self.s.katalog, sprache),
+            "schema": schema.als_dict(self.s.katalog, sprache,
+                                      plugin.registry.als_dict(), plugin.registry.fehler),
             "texte": self.s.katalog.alle(sprache),
         })
 
     async def config_holen(self, request):
         pfad = self.s.pfad
         daten, mtime, text = configfile.lese(pfad)
+        # Veraltete Namen kommen gar nicht erst im Browser an. Sonst zeigt das Formular
+        # die Felder des neuen Typs und das Datenmodell traegt den alten Namen weiter —
+        # und beim Speichern stuende der alte wieder in der Datei.
+        # ⚠ Nur die Kopie im Speicher. Geschrieben wird ausschliesslich beim Speichern.
+        umbenannt = migration.migriere(daten)
         return web.json_response({
             "pfad": anzeige_pfad(pfad),
             "mtime": mtime,
             "yaml": text,
             "daten": _rein(daten),
+            "umbenannt": umbenannt,
         })
 
     async def pruefen(self, request):
@@ -121,6 +128,12 @@ class KonfiguratorAPI:
     async def speichern(self, request):
         daten = await request.json()
         entwurf = daten.get("daten")
+        # Veraltete Namen werden hier umgeschrieben, nicht nur geduldet: der Konfigurator
+        # schreibt die Datei ohnehin neu, und ein alter Name, der bleibt, weil ihn niemand
+        # anfasst, faellt spaeter als Fehler auf (Formular zeigt den neuen Typ, Datei sagt
+        # den alten). Nach `config_holen` ist der Entwurf meist schon migriert — nicht aber
+        # bei einem Browser, der die Seite seit einer aelteren Fassung offen hat.
+        umbenannt = migration.migriere(entwurf)
         try:
             pruefe(entwurf, "(Entwurf)")
         except ConfigError as e:
@@ -129,6 +142,14 @@ class KonfiguratorAPI:
 
         # In die vorhandene Struktur einarbeiten — so ueberleben die Kommentare.
         vorhanden, mtime, _ = configfile.lese(self.s.pfad)
+        # ★ Auch die vorhandene Struktur, und zwar VOR dem Verschmelzen: sonst sieht die
+        # Verschmelzung `seiten` (Datei) gegen `pages` (Entwurf), loescht das eine und
+        # haengt das andere ans Ende — mitsamt Kommentarverlust an dieser Stelle.
+        # Positionstreu umbenannt bleibt beides an seinem Platz.
+        # ⚠ Und DIESE Liste ist die interessante: der Entwurf kam meist schon migriert aus
+        # `config_holen` zurueck, oben faellt also nichts mehr an. Was sich wirklich in der
+        # DATEI aendert, steht hier.
+        umbenannt = sorted(set(umbenannt) | set(migration.migriere(vorhanden)))
         verschmolzen = configfile.verschmelze(vorhanden, entwurf)
         try:
             sicherung = configfile.schreibe(self.s.pfad, verschmolzen,
@@ -139,8 +160,11 @@ class KonfiguratorAPI:
 
         neu_mtime = os.path.getmtime(self.s.pfad)
         geladen = await self.s.neu_laden()
+        if umbenannt:
+            _LOG.info("Beim Speichern umgeschrieben: %s", "; ".join(umbenannt))
         return web.json_response({"ok": True, "mtime": neu_mtime,
                                   "sicherung": os.path.basename(sicherung),
+                                  "umbenannt": umbenannt,
                                   "neu_geladen": geladen})
 
     async def neu_laden(self, request):

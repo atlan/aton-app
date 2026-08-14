@@ -8,13 +8,15 @@ Ergebnis pixelweise.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from PIL import Image, ImageDraw
 
-from .config import IconSpec, PanelCfg, TextSpec, Widget
+from . import plugin
+from .config import IconSpec, NotifyCfg, PanelCfg, TextSpec, Widget
 from .const import DEFAULT_COLOR, UNAVAILABLE_STATES
 from .fonts import FontRegistry
 from .icons import IconRegistry, _hex2rgb
@@ -26,11 +28,30 @@ WOCHENTAG_BALKEN_Y = 7          # Zeile des Wochentagsbalkens innerhalb der 8px-
 
 
 @dataclass
+class ScrollAuftrag:
+    """Was WLEDs eigene Laufschrift zeichnen soll — samt der Flaeche, auf der sie steht.
+
+    ★ Die Flaeche steht HIER und nicht mehr in `panel.notify`: seit es mehrere Meldezeilen
+    geben kann, weiss nur die Zeile, die den Auftrag ausgeloest hat, wo sie liegt. Vorher
+    nahm der Transport `notify.region` — mit zwei Zeilen waere die Laufschrift der zweiten
+    ueber der ersten gelandet.
+    """
+    text: str
+    bg: str
+    fg: str
+    region: tuple[int, int, int, int]
+    speed: int = 128
+    yoff: int = 128
+    font: int = 128
+    fx: int = 122
+
+
+@dataclass
 class RenderErgebnis:
     bild: Image.Image
     aktive_screens: dict[str, str] = field(default_factory=dict)
     aktive_seiten: dict[str, int] = field(default_factory=dict)
-    scroll_text: tuple[str, str, str] | None = None      # (Text, Hintergrund, Schrift)
+    scroll: ScrollAuftrag | None = None
     fehler: list[str] = field(default_factory=list)
 
 
@@ -129,7 +150,7 @@ class Renderer:
         symbol = self.icons.get(name)
         bild.paste(symbol, (x, y), symbol)
 
-    def _widget(self, bild: Image.Image, w: Widget) -> None:
+    def _widget(self, bild: Image.Image, w: Widget, fehler: list[str] | None = None) -> None:
         g = self.panel.grid
 
         if w.bg:
@@ -137,6 +158,14 @@ class Renderer:
                                           fill=_hex2rgb(w.bg))
 
         if w.type == "rect":
+            return
+
+        if w.type == "icons":
+            self._symbolliste(bild, w, fehler)
+            return
+
+        if w.type == "series":
+            self._series(bild, w, fehler)
             return
 
         if w.type == "image":
@@ -147,8 +176,28 @@ class Renderer:
             self._kalenderblatt(bild, w)
             return
 
+        if w.type == "clock_wd":
+            self._uhr_wd(bild, w)
+            return
+
         if w.type == "clock":
             self._uhr(bild, w)
+            return
+
+        # Eigene Typen aus /config/aton_widgets. Der Hintergrund ist oben schon gezeichnet,
+        # ein Plugin bekommt `bg:` also geschenkt. Ausnahmen fangt `_sicher` ab — ein
+        # fehlerhaftes Plugin hinterlaesst eine leere Stelle und eine Meldung, keinen
+        # stehengebliebenen Renderer.
+        eigen = plugin.registry.get(w.type)
+        if eigen:
+            try:
+                eigen.zeichne(bild, w, plugin.Kontext(self))
+            except Exception as e:
+                # Der Dateiname MUSS in die Meldung: `_sicher` nennt sonst nur die Stelle
+                # in der YAML, und die ist hier nicht das Problem.
+                _LOG.debug("Rueckverfolgung %s", eigen.quelle, exc_info=True)
+                raise RuntimeError(f"eigenes Widget {eigen.name!r} aus {eigen.quelle} — "
+                                   f"{type(e).__name__}: {e}") from e
             return
 
         if w.icon and w.type in ("tile", "icon"):
@@ -185,7 +234,7 @@ class Renderer:
                     blatt.putpixel((x, y), (0, 0, 0, 255))
         bild.paste(blatt, (w.x, w.y), blatt)
 
-    def _uhr(self, bild: Image.Image, w: Widget) -> None:
+    def _uhr_wd(self, bild: Image.Image, w: Widget) -> None:
         """Uhrzeit HH:MM plus Wochentagsbalken darunter."""
         jetzt = datetime.now()
         breite = w.text_w if w.text_w is not None else w.w
@@ -198,6 +247,16 @@ class Renderer:
         heute = jetzt.weekday()
         d.point((1 + heute * 3, WOCHENTAG_BALKEN_Y), fill=(255, 255, 255))
         d.point((2 + heute * 3, WOCHENTAG_BALKEN_Y), fill=(255, 255, 255))
+        bild.paste(feld, (w.x, w.y), feld)
+
+    def _uhr(self, bild: Image.Image, w: Widget) -> None:
+        """Uhrzeit HH:MM."""
+        jetzt = datetime.now()
+        breite = w.text_w if w.text_w is not None else w.w
+        feld = Image.new("RGBA", (breite, w.h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(feld)
+        self.fonts.get(w.font).draw(d, (3, 1), jetzt.strftime("%H:%M"),
+                                    _hex2rgb(self._farbe(w.color)))
         bild.paste(feld, (w.x, w.y), feld)
 
     # ==================================================================
@@ -293,15 +352,16 @@ class Renderer:
         return len(screen.seiten) - 1
 
     def frame(self, vorwahl: dict[str, str | None] | None = None,
-              notiz: dict | None = None,
+              notiz: dict | list[dict] | None = None,
               seiten_vorwahl: dict[str, int] | None = None) -> RenderErgebnis:
         vorwahl = vorwahl or {}
         seiten_vorwahl = seiten_vorwahl or {}
         bild = Image.new("RGB", (self.panel.width, self.panel.height), (0, 0, 0))
         ergebnis = RenderErgebnis(bild=bild)
 
-        for w in self.panel.widgets:
-            self._sicher(bild, w, ergebnis.fehler)
+        # Erst sammeln, dann zeichnen: die Reihenfolge entscheidet, was oben liegt, und die
+        # steht erst fest, wenn alle Kacheln beisammen sind (siehe `layer`).
+        zu_zeichnen: list[Widget] = list(self.panel.widgets)
 
         for gruppe in self.panel.groups:
             screen = self._screen_waehlen(gruppe, vorwahl.get(gruppe.id), ergebnis.fehler)
@@ -311,11 +371,19 @@ class Renderer:
             ergebnis.aktive_screens[gruppe.id] = screen.name
             j = self._seite_waehlen(screen, seiten_vorwahl.get(gruppe.id))
             ergebnis.aktive_seiten[gruppe.id] = j
-            for w in screen.seiten[j].widgets:
-                self._sicher(bild, w, ergebnis.fehler)
+            zu_zeichnen.extend(screen.seiten[j].widgets)
 
-        if notiz:
-            self._benachrichtigung(bild, notiz, ergebnis)
+        zu_zeichnen.extend(self.panel.overlays)
+
+        # ⚠ STABIL sortieren: bei gleicher Ebene bleibt die Reihenfolge des Sammelns, also
+        # erst Grundbild, dann Screens. Ohne diese Zusicherung waere eine Beschreibung ohne
+        # ein einziges `layer:` schon eine andere — genau das darf ein Umbau nicht kosten.
+        zu_zeichnen.sort(key=lambda w: w.layer)
+
+        zuordnung = self._meldungen_verteilen(zu_zeichnen, notiz, ergebnis)
+
+        for w in zu_zeichnen:
+            self._sicher(bild, w, ergebnis, zuordnung.get(id(w)))
 
         for meldung in ergebnis.fehler:
             if meldung not in self._gemeldet:
@@ -323,38 +391,339 @@ class Renderer:
                 _LOG.warning("%s: %s", self.panel.id, meldung)
         return ergebnis
 
-    def _sicher(self, bild: Image.Image, w: Widget, fehler: list[str]) -> None:
+    def _sicher(self, bild: Image.Image, w: Widget, ergebnis: RenderErgebnis,
+                notiz: dict | None = None) -> None:
         """Ein stolperndes Widget darf nie den ganzen Frame kosten."""
         try:
-            self._widget(bild, w)
+            if w.visible_when:
+                # Bei fehlerhafter Vorlage lieber zeichnen als verschlucken — eine Kachel,
+                # die wegen eines Tippfehlers in der Bedingung fehlt, sucht man im Bild.
+                try:
+                    if not self.tmpl.truthy(w.visible_when):
+                        return
+                except TemplateError as e:
+                    ergebnis.fehler.append(f"{w.pfad}.visible_when: {e}")
+            if w.type == "notify":
+                self._meldezeile(bild, w, notiz, ergebnis)
+                return
+            self._widget(bild, w, ergebnis.fehler)
         except Exception as e:
-            fehler.append(f"{w.pfad}: {type(e).__name__}: {e}")
+            ergebnis.fehler.append(f"{w.pfad}: {type(e).__name__}: {e}")
 
-    def _benachrichtigung(self, bild: Image.Image, notiz: dict,
-                          ergebnis: RenderErgebnis) -> None:
-        cfg = self.panel.notify
-        if not cfg.region:
+    def _symbolliste(self, bild: Image.Image, w: Widget,
+                     fehler: list[str] | None = None) -> None:
+        """Eine Liste von Symbolen im Bereich der Kachel — mit Umbruch.
+
+        Die Namen kommen aus der TEXTQUELLE (`template`, `value` oder `text`), getrennt
+        durch Komma oder Leerzeichen. Damit braucht dieser Typ keinen eigenen Schluessel
+        und kann alles, was Text auch kann — vor allem Jinja.
+
+        ★ Gleichmaessige Zellen: die Spaltenbreite ist fuer ALLE Symbole gleich (das
+        breiteste vorkommende, oder `cell_size`). Symbole sind unterschiedlich breit
+        (`builtin_icons.BREITEN`); wer sie einfach aneinanderreiht, bekommt eine Reihe,
+        die in der zweiten Zeile nicht mehr untereinander steht. Innerhalb seiner Zelle
+        wird jedes Symbol zentriert.
+
+        ⚠ Ein unbekannter Name wirft NICHT den ganzen Frame weg: er wird uebersprungen
+        und gemeldet. `self.icons.get` wuerde sonst mit KeyError aussteigen und die ganze
+        Kachel kosten — bei einer Liste aus einer Vorlage ist ein Tippfehler in EINEM
+        Namen aber der Normalfall.
+        """
+        if not w.text:
             return
-        # Sichtbarkeitsbedingung (z.B. nur wenn jemand im Raum ist). Bei fehlerhafter
-        # Vorlage lieber anzeigen als verschlucken — eine Meldung, die niemand sieht,
-        # ist schlimmer als eine zu viel.
-        if cfg.visible_when:
+        roh = self._text(w.text)
+        namen = [t for t in re.split(r"[,\s]+", roh.strip()) if t]
+        if not namen:
+            return
+
+        bilder, unbekannt = [], []
+        for n in namen:
             try:
-                if not self.tmpl.truthy(cfg.visible_when):
-                    return
-            except TemplateError as e:
-                ergebnis.fehler.append(f"notify.visible_when: {e}")
-        x, y, w, h = cfg.region
-        text = str(notiz["text"])[: cfg.max_chars]
-        bg, fg = cfg.levels.get(notiz.get("level", "info"), cfg.levels["info"])
+                bilder.append((n, self.icons.get(n)))
+            except KeyError:
+                unbekannt.append(n)
+        if unbekannt and fehler is not None:
+            fehler.append(f"{w.pfad}: Symbol(e) nicht gefunden: {', '.join(unbekannt)}")
+        if not bilder:
+            return
+
+        zelle_b = w.cell_w if w.cell_w else max(b.width for _, b in bilder)
+        zelle_h = w.cell_h if w.cell_h else max(b.height for _, b in bilder)
+        schritt_x = zelle_b + w.spacing
+        schritt_y = zelle_h + (w.spacing if w.line_spacing is None else w.line_spacing)
+        je_zeile = max(1, (w.w + w.spacing) // schritt_x)
+
+        # Zeilenweise aufteilen, damit die letzte Zeile mit ausgerichtet werden kann.
+        zeilen = [bilder[i:i + je_zeile] for i in range(0, len(bilder), je_zeile)]
+        passt = max(1, (w.h + w.spacing) // schritt_y)
+        if len(zeilen) > passt:
+            if fehler is not None:
+                fehler.append(f"{w.pfad}: {len(bilder)} Symbole passen nicht in "
+                              f"{w.w}x{w.h} — {sum(len(z) for z in zeilen[passt:])} "
+                              "abgeschnitten")
+            zeilen = zeilen[:passt]
+
+        for zi, zeile in enumerate(zeilen):
+            breite = len(zeile) * schritt_x - w.spacing
+            if w.align == "center":
+                x0 = w.x + (w.w - breite) // 2
+            elif w.align == "right":
+                x0 = w.x + w.w - breite
+            else:
+                x0 = w.x
+            y0 = w.y + zi * schritt_y
+            for si, (_, sym) in enumerate(zeile):
+                # In der Zelle zentrieren — sonst „klebt" ein schmales Symbol links.
+                x = x0 + si * schritt_x + (zelle_b - sym.width) // 2
+                y = y0 + (zelle_h - sym.height) // 2
+                bild.paste(sym, (x, y), sym)
+
+    def _series(self, bild: Image.Image, w: Widget,
+                fehler: list[str] | None = None) -> None:
+        """Spalten mit frei gewaehlten Reihen — Text und Symbole gemischt.
+
+        Eine Zeile aus der Textquelle. Spalten durch Komma, die Reihen einer Spalte durch
+        `|`. Ein Teil mit `@` davor ist ein SYMBOL, alles andere ist Text:
+
+            14|@w_sun|21°     Text, Symbol, Text (Stundenvorhersage)
+            Mo|Di             zwei Textreihen
+            @w_sun|@w_rain    zwei Symbolreihen
+            @r_liv|22°        Symbol ueber Text
+            @r_liv            nur ein Symbol
+
+        ★ Warum `@` und keine automatische Erkennung: ohne Kennzeichen muesste der Renderer
+        raten, ob `info` der Text „info" oder das Symbol `info` ist. Schlimmer noch — ein
+        neu gezeichnetes Symbol wuerde bestehende Kacheln stillschweigend veraendern, weil
+        ein bisheriger Text ploetzlich als Symbolname durchgeht.
+
+        ★ Die Reihen sind gleich hoch ueber ALLE Spalten (je Reihe das hoechste Vorkommen),
+        die Zellen gleich breit. Nur so stehen die Spalten buendig, auch wenn eine
+        Beschriftung doppelt so breit ist wie ihre Nachbarn.
+        """
+        if not w.text:
+            return
+        eintraege = [t.strip() for t in self._text(w.text).split(",") if t.strip()]
+        if not eintraege:
+            return
+
+        font = self.fonts.get(w.font)
+        farbe = self._farbe(w.color)
+        text_h = font.measure("0")[1]
+
+        def reihen_schrift(i: int):
+            """Schrift der Reihe i — oder die der Kachel.
+
+            ⚠ Eine unbekannte Schrift kostet nicht die Kachel: `fonts.get` wirft, und
+            ohne diesen Fang waere der ganze Frame an dieser Stelle weg. Gemeldet wird
+            trotzdem, sonst sucht man den Grund fuer die falsche Schrift im Bild.
+            """
+            name = w.row_fonts[i] if i < len(w.row_fonts) else ""
+            if not name:
+                return font
+            try:
+                return self.fonts.get(name)
+            except KeyError:
+                if fehler is not None:
+                    hinweis = f"{w.pfad}: Schrift {name!r} nicht gefunden (Reihe {i + 1})"
+                    if hinweis not in fehler:
+                        fehler.append(hinweis)
+                return font
+
+        def reihen_farbe(i: int) -> str:
+            wert = w.row_colors[i] if i < len(w.row_colors) else ""
+            return wert or farbe
+
+        # Je Spalte eine Liste von Reihen: ("sym", Bild) oder ("text", Zeichenkette)
+        spalten: list[list[tuple[str, object]]] = []
+        unbekannt: list[str] = []
+        for e in eintraege:
+            reihen: list[tuple[str, object]] = []
+            for teil in e.split("|"):
+                teil = teil.strip()
+                if teil.startswith("@"):
+                    name = teil[1:].strip()
+                    if not name:
+                        continue
+                    try:
+                        reihen.append(("sym", self.icons.get(name)))
+                    except KeyError:
+                        unbekannt.append(name)
+                        reihen.append(("text", ""))    # Platz halten, damit die Reihen
+                                                       # der Nachbarspalten nicht rutschen
+                else:
+                    reihen.append(("text", teil))
+            spalten.append(reihen)
+        if unbekannt and fehler is not None:
+            fehler.append(f"{w.pfad}: Symbol(e) nicht gefunden: {', '.join(unbekannt)}")
+
+        anzahl_reihen = max(len(sp) for sp in spalten)
+        if not anzahl_reihen:
+            return
+
+        # Hoehe je REIHE ueber alle Spalten hinweg — sonst stuenden gemischte Spalten
+        # (Symbol hier, Text dort) auf verschiedenen Grundlinien.
+        reihen_h = []
+        for i in range(anzahl_reihen):
+            # ⚠ Die Hoehe einer Textreihe richtet sich nach IHRER Schrift — eine groessere
+            # Schrift in Reihe 3 braucht mehr Platz, sonst ueberlappt sie die Nachbarreihe.
+            hoch = 0
+            for sp in spalten:
+                if i < len(sp):
+                    art, wert = sp[i]
+                    hoch = max(hoch, wert.height if art == "sym"
+                               else reihen_schrift(i).measure("0")[1])
+            reihen_h.append(hoch)
+
+        zeilen_abstand = w.spacing if w.line_spacing is None else w.line_spacing
+        block_h = sum(reihen_h) + zeilen_abstand * (anzahl_reihen - 1)
+        block_h = w.cell_h if w.cell_h else block_h
+
+        breiten = []
+        for sp in spalten:
+            b = 0
+            for i, (art, wert) in enumerate(sp):
+                b = max(b, wert.width if art == "sym"
+                        else (reihen_schrift(i).measure(wert)[0] if wert else 0))
+            breiten.append(b)
+        zelle_b = w.cell_w if w.cell_w else max(breiten)
+
+        schritt_x = zelle_b + w.spacing
+        je_zeile = max(1, (w.w + w.spacing) // schritt_x)
+        zeilen = [spalten[i:i + je_zeile] for i in range(0, len(spalten), je_zeile)]
+        passt = max(1, (w.h + zeilen_abstand) // (block_h + zeilen_abstand))
+        if len(zeilen) > passt:
+            if fehler is not None:
+                fehler.append(f"{w.pfad}: {len(spalten)} Spalten passen nicht in "
+                              f"{w.w}x{w.h} — {sum(len(z) for z in zeilen[passt:])} "
+                              "abgeschnitten")
+            zeilen = zeilen[:passt]
+
+        for zi, zeile in enumerate(zeilen):
+            breite = len(zeile) * schritt_x - w.spacing
+            if w.align == "center":
+                x0 = w.x + (w.w - breite) // 2
+            elif w.align == "right":
+                x0 = w.x + w.w - breite
+            else:
+                x0 = w.x
+            y_block = w.y + zi * (block_h + zeilen_abstand)
+
+            for si, sp in enumerate(zeile):
+                zx = x0 + si * schritt_x
+                y = y_block
+                for i in range(anzahl_reihen):
+                    h = reihen_h[i]
+                    if i < len(sp):
+                        art, wert = sp[i]
+                        if art == "sym":
+                            bild.paste(wert, (zx + (zelle_b - wert.width) // 2,
+                                              y + (h - wert.height) // 2), wert)
+                        elif wert:
+                            # ⚠ `y - 1`: `_schreibe` rueckt seinen Text im Feld um 1 px
+                            # nach unten. Ohne die Korrektur sind die Abstaende ueber und
+                            # unter einer Reihe verschieden (0.16.1).
+                            r_font = w.row_fonts[i] if i < len(w.row_fonts) else ""
+                            self._schreibe(bild, wert, zx, y - 1, zelle_b, h + 2,
+                                           reihen_farbe(i), r_font or w.font, "center")
+                    y += h + zeilen_abstand
+
+    # ==================================================================
+    #  Meldungen
+    # ==================================================================
+    def _meldungen_verteilen(self, zu_zeichnen: list[Widget],
+                             notiz: dict | list[dict] | None,
+                             ergebnis: RenderErgebnis) -> dict[int, dict]:
+        """Welche Meldung steht in welcher Zeile?
+
+        Zwei Regeln, und die zweite ist die wichtigere:
+
+        · Eine Zeile mit `channel: x` zeigt ausschliesslich Meldungen dieses Kanals.
+        · Eine Zeile OHNE Kanal ist die Hauptzeile. Sie zeigt alles Kanallose — und
+          zusaetzlich Meldungen, fuer deren Kanal es auf dieser Anzeige gar keine Zeile
+          gibt. Sonst verschwaende ein Tippfehler im Kanal die Meldung spurlos, und der
+          Dienst haette „ok" gemeldet.
+
+        Was gar nirgends unterkommt, wird als Fehler vermerkt — sichtbar in der
+        Oberflaeche, solange die Meldung laeuft.
+        """
+        notizen = [notiz] if isinstance(notiz, dict) else list(notiz or [])
+        zeilen = [w for w in zu_zeichnen if w.type == "notify"]
+        # ⚠ Eine Anzeige GANZ OHNE Meldezeile schweigt — sie ist kein Fehler. `aton.notify`
+        # ohne `panel:` geht ausdruecklich an alle Anzeigen, und die kleine 32x16 am
+        # Eingang hat keine Zeile und braucht keine. Beim Vergleich mit der laufenden
+        # Beschreibung stand hier sonst auf zwei von drei Anzeigen dauerhaft eine rote
+        # Zeile — fuer etwas, das genau so gemeint ist.
+        if not notizen or not zeilen:
+            return {}
+
+        kanaele = {w.notify.channel for w in zeilen if w.notify and w.notify.channel}
+        zuordnung: dict[int, dict] = {}
+        untergekommen: set[int] = set()
+
+        for w in zeilen:
+            cfg = w.notify or NotifyCfg()
+            for i, n in enumerate(notizen):
+                if _passt(cfg, n, kanaele):
+                    zuordnung[id(w)] = n
+                    untergekommen.add(i)
+                    break
+
+        for i, n in enumerate(notizen):
+            if i not in untergekommen:
+                ergebnis.fehler.append(
+                    f"Meldung {str(n.get('text', ''))[:40]!r} (Kanal "
+                    f"{n.get('channel') or '—'}, Stufe {n.get('level', 'info')}): "
+                    "keine passende Meldezeile")
+        return zuordnung
+
+    def _meldezeile(self, bild: Image.Image, w: Widget, notiz: dict | None,
+                    ergebnis: RenderErgebnis) -> None:
+        """Eine Meldezeile zeichnen. Ohne Meldung bleibt sie leer — nicht schwarz.
+
+        ⚠ Kein `bg` fuer die leere Zeile: `_widget` fuellt einen gesetzten Hintergrund
+        sonst auch dann, wenn nichts anliegt, und dann steht auf der Matrix ein Balken
+        ohne Inhalt. Die Farbe kommt aus der STUFE der Meldung.
+        """
+        cfg = w.notify or NotifyCfg()
+        if not notiz:
+            return
+        text = str(notiz.get("text", ""))[: cfg.max_chars]
+        if not text:
+            return
+        bg, fg = cfg.levels.get(str(notiz.get("level", "info")),
+                                cfg.levels.get("info", ("00c000", "ffffff")))
 
         if len(text) > cfg.max_bar_chars:
             # Zu lang fuer einen stehenden Balken -> WLEDs eigene Laufschrift.
             # Der Bildspeicher bleibt hier schwarz; das Scroll-Segment zeichnet darueber.
-            ergebnis.scroll_text = (text, bg, fg)
+            #
+            # ⚠ Es gibt nur EIN Scroll-Segment je Geraet (`panel.scroll_segment`). Die
+            # zweite laufende Meldung kann also nicht auch noch laufen — das gehoert
+            # gesagt und nicht verschluckt.
+            if ergebnis.scroll is None:
+                ergebnis.scroll = ScrollAuftrag(
+                    text=text, bg=bg, fg=fg, region=(w.x, w.y, w.w, w.h),
+                    speed=cfg.scroll_speed, yoff=cfg.scroll_yoff, font=cfg.scroll_font,
+                    fx=cfg.scroll_fx)
+            else:
+                ergebnis.fehler.append(
+                    f"{w.pfad}: zweite Laufschrift gleichzeitig — das Geraet hat nur ein "
+                    f"Scroll-Segment. Kuerzer als max_bar_chars ({cfg.max_bar_chars}) "
+                    "bliebe die Meldung ein stehender Balken")
             return
-        ImageDraw.Draw(bild).rectangle([x, y, x + w - 1, y + h - 1], fill=_hex2rgb(bg))
-        self._schreibe(bild, text, x, y, w, h, fg, cfg.font)
+        ImageDraw.Draw(bild).rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1],
+                                       fill=_hex2rgb(bg))
+        self._schreibe(bild, text, w.x, w.y, w.w, w.h, fg, cfg.font, w.align)
+
+
+def _passt(cfg: NotifyCfg, notiz: dict, kanaele: set[str]) -> bool:
+    """Gehoert diese Meldung in diese Zeile? Regeln siehe `_meldungen_verteilen`."""
+    if cfg.show_levels and str(notiz.get("level", "info")) not in cfg.show_levels:
+        return False
+    kanal = notiz.get("channel")
+    if cfg.channel:
+        return kanal == cfg.channel
+    return not kanal or kanal not in kanaele
 
 
 def pixelraster(bild: "Image.Image", zoom: int) -> "Image.Image":

@@ -137,6 +137,11 @@ class WebUI:
                 "bytes": stat.letzte_bytes,
                 "fehler": stat.fehler,
                 "letzter_fehler": stat.letzter_fehler,
+                # Erreichbarkeit als ZUSTAND (siehe `Statistik.unerreichbar_seit`):
+                # eine Matrix, die eine Nacht lang stromlos war, ist ein Sachverhalt
+                # und keine 5888 Vorfaelle.
+                "unerreichbar_seit": stat.unerreichbar_seit,
+                "sendepause": d.sendepause,
                 "letzter_lauf": d.letzter_lauf,
                 "render_fehler": erg.fehler if erg else [],
                 "notiz": d.aktive_notiz(),
@@ -173,12 +178,7 @@ class WebUI:
     async def vorschau(self, request):
         """Aktuelles Bild als PNG — `?zoom=6` vergroessert, `?raster=1` zeigt das Pixelgitter."""
         d = self._display(request)
-        erg = d.letztes_ergebnis
-        if erg is None:
-            # Noch kein Takt gelaufen (Matrix aus): trotzdem etwas zeigen.
-            bild = d.renderer.frame(d.vorwahl, d.aktive_notiz()).bild
-        else:
-            bild = erg.bild
+        bild = d.vorschaubild()
 
         zoom = max(1, min(20, int(request.query.get("zoom", 6))))
         gross, _ = vergroessern(bild, zoom, d.cfg.led_pitch,
@@ -232,7 +232,7 @@ class WebUI:
     async def notiz_loeschen(self, request):
         d = self._display(request)
         daten = await request.json() if request.can_read_body else {}
-        d.notiz_loeschen(daten.get("id"))
+        d.notiz_loeschen(daten.get("id"), daten.get("channel"))
         return web.json_response({"ok": True})
 
     # ------------------------------------------------------------------

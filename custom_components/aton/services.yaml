@@ -41,6 +41,15 @@ notify:
         number:
           min: 1
           max: 9
+    channel:
+      name: Kanal
+      description: >-
+        Kanal der Meldezeile aus der YAML (`channel:` am Widget `type: notify`).
+        Ohne Angabe erscheint die Meldung in der Hauptzeile — also jeder Zeile
+        ohne eigenen Kanal.
+      example: warnungen
+      selector:
+        text:
     panel:
       name: Anzeige
       description: ID der Anzeige aus der YAML. Ohne Angabe gilt die Meldung für alle.
@@ -55,6 +64,13 @@ notify_clear:
     id:
       name: Kennung
       description: Leer lassen, um alle Meldungen zu löschen.
+      selector:
+        text:
+    channel:
+      name: Kanal
+      description: >-
+        Nur die Meldungen dieses Kanals löschen. Wirkt nur ohne Kennung.
+      example: warnungen
       selector:
         text:
     panel:

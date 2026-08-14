@@ -1,5 +1,584 @@
 # Änderungen
 
+## 0.20.2 — der Helligkeitsregler wirkt, und die Seite springt nicht mehr
+
+Zwei getrennte Fehler, die zusammen wie einer aussahen: „Regler bewegt, nichts passiert,
+dann springt die Seite nach oben, und die Matrix bleibt gleich hell — erst *Vollbild
+senden* wirkt."
+
+**1. Eine Helligkeitsänderung erzwingt jetzt ein Vollbild.** Auf einem eingefrorenen
+Segment wirkt die Segmenthelligkeit erst, wenn die Pixel *neu geschrieben* werden; der
+bloße Wert ändert das stehende Bild nicht. Bei einer Anzeige, deren Inhalt sich ständig
+bewegt, fällt das nie auf — bei einer stehenden fällt es voll auf. Sechs Takte gemessen:
+
+| Anzeige | geänderte Pixel je Takt |
+| --- | --- |
+| Matrix Wohnzimmer Side (Uhr, Temperaturen) | 18–43 |
+| Matrix Wohnzimmer TV (ToDo-Liste) | **0 in 5 von 6** |
+| Matrix Entry | **0 in 6 von 6** |
+
+Deshalb half nur der Knopf, der genau das tut. Jetzt tut die App es selbst. Preis: 34 kB
+statt 40 Byte, aber nur wenn jemand den Regler anfasst.
+
+**2. Die Betriebsansicht hängte jede Karte bei jeder Abfrage neu ein.** `appendChild` auf
+einen bereits eingehängten Knoten löst ihn aus dem Baum und setzt ihn neu — bei 3 s Taktung
+also 20-mal pro Minute je Karte. Im Browser mit einem MutationObserver mitgeschrieben:
+
+    12:40:13  weg p-wohnzimmer · neu p-wohnzimmer · weg p-entry · neu p-entry · …
+    12:40:16  dasselbe
+    12:40:19  dasselbe
+
+Das nimmt dem Bedienelement den Fokus und lässt die Seite springen — der Regler wurde dem
+Benutzer unter dem Finger weggezogen. Verschoben wird jetzt nur noch, was tatsächlich
+falsch steht; die Sortierung nach der Beschreibungsdatei bleibt.
+
+## 0.20.1 — die Wartezeit gehört an die Anzeige
+
+Die 90 Sekunden aus 0.20.0 waren aus **zwei** Messungen gewählt (17,9 und 20,3 s). Beim
+Nachweis am selben Tag hat dieselbe Anzeige **95 s** gebraucht — Schaltskript mit 20 s
+fester Wartezeit, danach richtet HA den Konfigurationseintrag ein.
+
+Neu: **`gate.wartezeit`** je Anzeige, Vorgabe 90 s. Ein zu niedriger Wert kostet einen
+Versuch und danach den Rückzug, keine kaputte Anzeige — aber wer sein Gerät kennt, soll
+den Wert setzen können, statt ihn im Quelltext zu suchen.
+
+## 0.20.0 — gesendet wird erst, wenn jemand da ist
+
+Aton hat bisher gesendet, sobald die Anzeige *eingeschaltet* war — nicht, sobald das Gerät
+*antwortet*. Das sind zwei verschiedene Dinge, und an der Anlage am 14.08.2026 gemessen
+liegen dazwischen 18–20 Sekunden:
+
+| Anzeige | Strom (`switch.…`) | Tor (`light.…_haupt`) | Abstand |
+| --- | --- | --- | --- |
+| Matrix Wohnzimmer Side | 11:21:18,33 | 11:21:38,59 | **20,3 s** |
+| Matrix Wohnzimmer TV | 10:43:20,08 | 10:43:38,01 | **17,9 s** |
+
+In dieser Lücke ging ein Vollbild raus — in acht Blöcken, von denen jeder einzeln in eine
+Zeitüberschreitung lief. **Acht Sendefehler je Einschaltvorgang, für einen Sachverhalt.**
+Und eine Matrix, die eine Nacht lang stromlos war, brachte es auf **5888**.
+
+Vier Änderungen:
+
+- **Auf das Tor warten statt auf den Strom.** Home Assistant setzt die Tor-Entität erst
+  auf `on`, wenn es mit dem Gerät spricht — die Erreichbarkeitsprüfung war also längst da,
+  nur hat `gate.fallback` sie überholt. Der Rückfall war als Notausgang gedacht
+  (Henne-Ei ohne zweites Segment), nicht als Beschleuniger. Er greift jetzt erst nach
+  **90 Sekunden**, und der Versuch danach gilt als Probe.
+- **Nach dem ersten gescheiterten Block ist Schluss.** Der erste Block beantwortet die
+  Frage vollständig; ein eigener Ping wäre überflüssig und würde weniger beweisen.
+- **Rückzug** nach einem Fehlversuch: 10, 20, 40, 60 s. Gezeichnet wird weiter im Takt,
+  damit die Vorschau nicht einfriert — nur geschickt wird nicht.
+- **Erreichbarkeit ist ein Zustand**, kein Ereignis: die Betriebsansicht zeigt
+  „nicht erreichbar seit 02:41" statt tausender Vorfälle. Gezählt wird nur noch, was
+  scheitert, **obwohl** HA das Gerät als erreichbar führt.
+
+Dazu ein expliziter `ClientTimeout` — ohne den galt aiohttps Vorgabe von fünf Minuten.
+
+**Außerdem:** Die Vorschau einer Anzeige, die seit dem Start der App nie gelaufen ist,
+wurde bei *jedem* Abruf neu gerechnet — die Betriebsansicht pollt alle 3 s, und weil Uhr
+und Live-Werte im Bild stehen, änderte sich die Vorschau einer abgeschalteten Matrix
+munter weiter. Sie wird jetzt einmal gerechnet und behalten.
+
+## 0.19.2 — die Meldung nach dem Speichern nennt die Stellen
+
+0.19.0 hat nach dem Speichern nichts mehr gemeldet: gezählt wurde, was am **Entwurf**
+umzubenennen war — und der kam schon migriert aus dem Ladevorgang zurück. Gezählt wird
+jetzt, was sich in der **Datei** ändert.
+
+## 0.19.1 — der Speichern-Knopf zur Umbenennung
+
+Nachtrag zu 0.19.0, beim Live-Test aufgefallen: der Hinweis „wird beim Speichern
+umgeschrieben" stand da, der **Speichern-Knopf war aber aus** — er hängt an
+„ungespeicherte Änderungen", und nach dem Laden gab es noch keine. Zu schreiben war die
+Umbenennung also erst, wenn zufällig etwas anderes geändert wurde.
+
+Eine migrierte Beschreibung zählt jetzt als ungespeicherte Änderung — was sie ist: das
+Datenmodell weicht von der Datei ab.
+
+## 0.19.0 — der Konfigurator schreibt veraltete Namen um
+
+Bisher hat Aton veraltete Namen nur **geduldet**: `seiten`, `zyklen`, `wechsel_zyklen`,
+`wechsel_s` und `type: serie` wurden beim Laden übernommen, in der Datei blieben sie stehen.
+Das ist einmal teuer geworden: eine Kachel mit `type: serie` bekam im Konfigurator keine
+`row_*`-Felder — das Formular zeigte den neuen Typ, die Datei sagte den alten.
+
+Jetzt schreibt der Konfigurator sie um, beim Speichern, und sagt jede Stelle an — beim
+Öffnen der Datei („wird beim Speichern umgeschrieben") und danach.
+
+- Umbenannt wird **an Ort und Stelle**: der Schlüssel behält seine Position und seinen
+  Kommentar. `wechsel_s` (Sekunden) wird mit demselben Bildtakt in Zyklen umgerechnet wie
+  im Lader — nach dem Speichern läuft die Anzeige exakt wie vorher.
+- Geschrieben wird **nur beim Speichern**. Wer von Hand pflegt und den Konfigurator nicht
+  benutzt, merkt nichts davon; der Lader nimmt die alten Namen weiter entgegen.
+- Was sich nicht umrechnen lässt (`wechsel_s: bald`), bleibt stehen und verhindert das
+  Speichern nicht — die Beschwerde kommt wie bisher beim Laden.
+
+
+## 0.18.0 — Farbe und Schrift je Reihe
+
+`series` kann jetzt jede Reihe eigen gestalten:
+
+```yaml
+- type: series
+  color: ffffff
+  row_colors: [808080, "", ffcc00]     # Stunde grau, Symbolreihe unberührt, Temperatur bernstein
+  row_fonts: ["", "", spleen-5x8]      # letzte Reihe größer
+```
+
+Die **Stelle in der Liste ist die Reihe**; ein leerer Eintrag — oder gar keiner — heißt „wie
+die Kachel". Beide Schreibweisen gehen: YAML-Liste oder Kommaliste (`808080, , ffcc00`), denn
+im Formular des Konfigurators gibt es für Listen kein Feld.
+
+**Der Stil steht an der Kachel, nicht in der Vorlage.** Die Daten kommen aus Home Assistant
+und sollen keine Darstellung mitschleppen — sonst müsste ein Sensor wissen, welche Farbe auf
+welcher Matrix gut aussieht.
+
+- Eine Reihe mit größerer Schrift bekommt **mehr Höhe**, damit nichts überlappt.
+- Eine unbekannte Schrift kostet nur den Stil dieser Reihe, nicht die Kachel: Rückfall auf
+  die Schrift der Kachel, mit Meldung.
+- Eine krumme Farbe wird **beim Laden** abgelehnt, mit der Stelle in der Datei. Beim
+  Zeichnen käme sonst jeden Frame eine Ausnahme, ohne zu sagen wo.
+
+
+## 0.17.1 — der Umbenennungs-Hinweis war zu geschwätzig
+
+Die Meldung „`seiten` heißt jetzt `pages`" schrieb den übernommenen Wert aus — und das ist
+die komplette Seitenliste mit allen Kacheln. Im Protokoll stand danach eine Bildschirmseite
+YAML, in der die eigentliche Meldung unterging. Jetzt nur noch angedeutet: „11 Einträge"
+bei Listen, sonst die ersten 60 Zeichen.
+
+
+## 0.17.0 — englische Schlüssel, und `series` beschreibt jetzt seine eigene Anordnung
+
+**Die letzten deutschen Schlüssel sind weg.** Der Rest der Beschreibungssprache war längst
+englisch (`type`, `at`, `size`, `template`, `align`, `spacing`); vier Ausreißer blieben:
+
+| alt | neu |
+|---|---|
+| `type: serie` | `type: series` |
+| `seiten:` | `pages:` |
+| `zyklen:` | `cycles:` |
+| `wechsel_zyklen:` | `page_cycles:` |
+
+⚠ **Die alten Namen bleiben gültig** — über denselben Mechanismus, der schon `wechsel_s`
+auffängt. Deine Beschreibung muss nicht angefasst werden; im Protokoll steht ein Hinweis,
+und beim nächsten Speichern im Konfigurator wird umgeschrieben.
+
+**`series` bestimmt die Anordnung jetzt in der Vorlage.** Vorher lagen drei Reihen fest:
+Text, Symbol, Text. Jetzt sind es beliebig viele, und `@` markiert ein Symbol:
+
+```
+14|@w_sun|21°     Text, Symbol, Text (die Stundenvorhersage)
+Mo|Di             zwei Textreihen
+@w_sun|@w_rain    zwei Symbolreihen
+@r_liv|22°        Symbol über einer Beschriftung
+@r_liv            nur ein Symbol
+```
+
+⚠ **Warum `@` und keine automatische Erkennung:** ohne Kennzeichen müsste der Renderer
+raten, ob `info` der Text „info" oder das Symbol `info` ist — und ein neu gezeichnetes
+Symbol würde bestehende Kacheln stillschweigend verändern, weil ein bisheriger Text
+plötzlich als Symbolname durchgeht.
+
+Die Reihen sind über alle Spalten gleich hoch (je Reihe das höchste Vorkommen), damit
+gemischte Spalten auf einer Grundlinie stehen. Ein fehlendes Symbol hält seinen Platz frei,
+statt die Nachbarspalten zu verschieben.
+
+
+## 0.16.2 — Abstand waagerecht und senkrecht getrennt
+
+`spacing` galt für beide Achsen. Das geht nicht auf: Spalten brauchen Luft, die drei Reihen
+einer Spalte gehören dicht zusammen — mit einem gemeinsamen Wert ist immer eines falsch.
+
+Neu ist **`line_spacing`** für die senkrechte Richtung (bei `serie` zwischen Beschriftung,
+Symbol und Beschriftung; bei `icons` zwischen umgebrochenen Zeilen). Leer gelassen gilt
+weiterhin `spacing` für beides — bestehende Kacheln ändern sich also nicht.
+
+```yaml
+- type: serie
+  spacing: 4          # Luft zwischen den Spalten
+  line_spacing: 0     # Reihen bündig
+```
+
+Vom Benutzer am Bild bemerkt, nicht von mir.
+
+
+## 0.16.1 — ungleiche Zeilenabstände im Typ `serie`
+
+Über dem Symbol stand 1 px zu wenig Abstand, darunter 1 px zu viel — bei `spacing: 2`
+gemessen 1 und 3 px statt zweimal 2. Ursache: `_schreibe` rückt seinen Text innerhalb des
+Feldes um 1 px nach unten; das war in der Rechnung nicht berücksichtigt.
+
+Die Beschriftungen werden jetzt um genau dieses eine Pixel höher gesetzt. Nachgemessen:
+`spacing: 2` → 2/2, `spacing: 1` → 1/1, `spacing: 0` → bündig. Ein Test hält alle vier
+Fälle fest.
+
+⚠ Aufgefallen ist das am gerenderten Bild, nicht in den sieben Tests — die prüften, DASS
+drei Reihen da sind, nicht in welchem Rhythmus.
+
+
+## 0.16.0 — Spalten aus Beschriftung, Symbol und Beschriftung
+
+Neuer Typ **`serie`**, gebaut für eine Stundenvorhersage:
+
+```yaml
+- type: serie
+  at: [0, 40]
+  size: [128, 22]
+  spacing: 2
+  align: center
+  template: "14|sol_o|21, 15|wet|20, 16|wet|19, 17|dry|18, 18|dry|17"
+```
+
+Spalten durch Komma, die drei Teile einer Spalte durch `|`. Jeder Teil darf leer sein
+(`|rain|` ist nur ein Symbol, `14||21` nur Zahlen), und eine Reihe, die niemand benutzt,
+kostet keine Höhe.
+
+**Warum ein eigener Typ und nicht drei Kacheln:** `text` + `icons` + `text` täte es auch,
+aber die Bündigkeit hinge daran, dass die Vorlage jede Beschriftung auf dieselbe Breite
+auffüllt — und das bricht, sobald man die Spaltenzahl oder die Fläche ändert. Hier sind die
+Spalten bauartbedingt bündig: gleich breite Zellen, jeder Teil darin zentriert. Umbruch,
+Abschneide-Meldung und der Hinweis auf unbekannte Symbole arbeiten wie beim Typ `icons`.
+
+⚠ **Wettersymbole liefert Aton nicht mit.** Der eingebaute Satz hat `sol_i`, `sol_o`,
+`dry`, `wet`, `lux` und die `wind_*`-Familie — nichts für bewölkt, Schauer, Nebel, Gewitter.
+Die zeichnet man im Symbol-Editor; die Zuordnung Wetterlage → Symbolname gehört nach Home
+Assistant, damit der Name an genau einer Stelle steht.
+
+
+## 0.15.0 — Symbollisten aus einer Vorlage
+
+Neuer Widget-Typ **`icons`**: eine Liste von Symbolen in einem festgelegten Bereich, deren
+Inhalt aus Jinja kommt.
+
+```yaml
+- type: icons
+  at: [0, 18]
+  size: [64, 18]
+  spacing: 1
+  template: >-
+    {% for r in ['liv','kit','bat'] if is_state('binary_sensor.' ~ r ~ '_window','on') %}
+      r_{{ r }}
+    {% endfor %}
+```
+
+Die Namen kommen aus der **Textquelle** (`template`, `value` oder `text`), getrennt durch
+Komma oder Leerzeichen. Damit braucht der Typ keinen eigenen Schlüssel und kann alles, was
+Text auch kann. Ohne Quelle wird er beim Laden abgelehnt — er könnte nie etwas zeigen.
+
+**Umbruch automatisch:** die Symbole füllen von links nach rechts und laufen in die nächste
+Zeile weiter, bis die Höhe aufgebraucht ist.
+
+**Die Spalten stehen untereinander.** Alle Zellen sind gleich groß (das breiteste Symbol der
+Liste, oder `cell_size: [b, h]`), jedes Symbol wird darin zentriert. Ohne das würde ein
+breiteres Symbol — `cal` ist 9 px, alle anderen 8 — alles danach verschieben, und die
+zweite Zeile stünde schief unter der ersten.
+
+**Ein Tippfehler kostet ein Symbol, nicht die Kachel.** Ein unbekannter Name wird
+übersprungen und im Betriebs-Reiter genannt; bei einer Liste aus einer Vorlage ist das der
+Normalfall, nicht die Ausnahme. Ebenso wird gemeldet, was nicht in die Fläche passt —
+stilles Weglassen sähe aus wie „die Vorlage liefert zu wenig".
+
+Neun Tests halten das fest, darunter die deckungsgleichen Zeilen bei gemischten Breiten.
+
+
+## 0.14.2 — die Warnung blieb trotz 0.14.1 unsichtbar
+
+0.14.1 hat sie an die Vorschau gehängt und nach dem Anzeigen gelöscht. Übersehen: `waehle()`
+löst beim Screenwechsel eine **eigene** Vorschau aus, die früher zurückkommt — sie zeigte
+die Warnung, löschte sie, und die zweite Auffrischung 350 ms später setzte wieder den
+Standardtext. Aufgeblitzt und weg, bevor sie jemand lesen konnte.
+
+Jetzt bleibt sie stehen, bis etwas anderes angewählt wird.
+
+
+## 0.14.1 — die Warnung beim Verschieben war nach 350 ms wieder weg
+
+Die Prüfung aus 0.14.0 lief korrekt, nur sah man ihr Ergebnis nicht: `kachelVerschieben`
+schrieb den Hinweis sofort in die Zeile, und `nachAenderung` holt 350 ms später die
+Vorschau — die setzt die Hinweiszeile auf ihren Standardtext zurück.
+
+Beim Prüfen im Browser aufgefallen: eine Kachel in den Screen „Solar" (Bereich
+`[0, 26, 128, 27]`) verschoben, sie liegt dort bei y = 9 — also weit außerhalb —, und die
+Zeile zeigte trotzdem den gewohnten Text.
+
+Die Warnung reist jetzt als `K.umzugHinweis` mit und wird gesetzt, **wenn das neue Bild
+steht**; danach wird sie gelöscht. Sie gilt für genau eine Auffrischung.
+
+
+## 0.14.0 — Kacheln lassen sich in eine andere Liste verschieben
+
+↑/↓ kamen nur **innerhalb** einer Liste voran. Eine Kachel aus dem Grundbild in eine
+Screen-Gruppe zu holen — oder auf die zweite Matrix — ging nur über den YAML-Editor.
+
+Jetzt steht in der Werkzeugzeile einer Kachel ein Klappfeld **„Verschieben nach …"** mit
+allen Zielen: das Grundbild jeder Anzeige und jede Seite jedes Screens, beschriftet mit dem
+ganzen Weg (`Matrix Wohnzimmer › Felder › Solar › Seite 2`) — bei gleichnamigen Screens in
+zwei Anzeigen ist sonst nicht zu erkennen, welcher gemeint ist. Fehlt im Ziel die
+`widgets:`-Liste, wird sie angelegt.
+
+**Die Koordinaten bleiben unverändert** — auch beim Wechsel zwischen zwei Anzeigen mit
+unterschiedlichem Raster. Umrechnen wäre gut gemeint und überraschend: die Kachel stünde
+danach woanders, als man sie hingeschoben hat. Stattdessen wird geprüft und gesagt:
+
+- außerhalb der **Anzeigefläche** → wird gar nicht gezeichnet
+- außerhalb des **Bereichs der Screen-Gruppe** → wird gezeichnet, aber beim Screenwechsel
+  nicht mit ausgetauscht
+
+Verschoben wird in beiden Fällen trotzdem; der Hinweis steht unter der Vorschau, und die
+Vorschau zeigt sofort, wo die Kachel gelandet ist.
+
+Kein Drag & Drop im Baum: über eine lange Struktur zu ziehen ist auf dem Tablet kaum zu
+treffen, und ungültige Ziele müssten eigens markiert werden. Das Klappfeld kennt nur gültige.
+
+
+## 0.13.3 — zuklappen jetzt wirklich, auch bei den Eltern
+
+0.13.2 war zu kurz gegriffen. Aufgeklappt wurde der Pfad zur Auswahl weiterhin bei **jedem**
+Neuzeichnen — ich hatte nur den ausgewählten Knoten selbst davon ausgenommen. Alles darüber
+blieb verhaftet: eine Anzeige ließ sich nicht schließen, solange darin irgendetwas
+ausgewählt war. Genau so gemeldet und im Browser nachgemessen — `panels/0` stand nach dem
+Klick auf den Pfeil unverändert in `K.offen`.
+
+Aufklappen ist eine Folge des **Auswählens**, kein Zustand des Zeichnens. Der Pfad geht
+jetzt einmalig in `waehle()` auf, und `baumZeichnen` klappt gar nichts mehr auf.
+
+
+## 0.13.2 — Knoten im Baum ließen sich nicht zuklappen
+
+Aufklappen ging, Zuklappen nicht: der Pfeil sprang sofort zurück auf ▾.
+
+Der Baum klappt den Pfad zur Auswahl auf — und zwar bisher **einschließlich des
+ausgewählten Knotens**. Ein Klick auf die Beschriftung wählt den Knoten aber an, also trug
+sich sein eigener Schlüssel bei jedem Neuzeichnen wieder ein: `K.offen.delete(…)` wirkte,
+und drei Zeilen später machte die Schleife es rückgängig.
+
+Im Browser gemessen — nach dem Klick auf den Pfeil stand der Schlüssel unverändert in
+`K.offen`, Pfeil ▾, Kinder sichtbar:
+
+    nach Klick auf „Grundbild":  offen = [… "panels/0/widgets" …]
+    nach Klick auf den Pfeil  :  offen = [… "panels/0/widgets"]
+
+Jetzt klappt das Zeichnen nur noch die **Eltern** auf. Dass ein angewählter Knoten sich
+öffnet, bleibt — es passiert einmalig beim Klick (`waehle`) statt bei jedem Zeichnen.
+
+⚠ Der Fehler ist alt: die Schleife steht seit dem Umbau auf Aton (0.8.0) so da und hat
+nichts mit der Meldezeile zu tun.
+
+
+## 0.13.1 — die Rahmen in der Vorschau richten sich jetzt selbst
+
+Die anklickbaren Rahmen sitzen an `bild.clientWidth / bild.naturalWidth`. Steht diese
+Breite beim Zeichnen noch nicht fest (Bild noch nicht gelegt, Reiter verborgen), greift der
+Rückfall `skala = 1` — und dann sitzen alle Rahmen um denselben **Faktor** daneben. Kein
+fester Versatz: sie driften umso weiter, je weiter rechts und unten sie liegen.
+
+Gerichtet hat das bisher erst das nächste Fensterereignis. Am 08.08.2026 gemeldet: die
+Rahmen saßen daneben und sprangen erst an ihren Platz, als sich das Fenster umlegte. Auf
+ein Ereignis zu warten, das mit der Sache nichts zu tun hat, ist die falsche Bedingung.
+
+Jetzt beobachtet ein `ResizeObserver` das Bild selbst und setzt die Rahmen neu, sobald es
+seine Größe bekommt — und nur dann, sonst löst das Neuzeichnen den Beobachter erneut aus.
+
+⚠ Die Ursache ist damit **nicht bewiesen**, nur die Bedingung repariert: der Zustand von
+damals ließ sich nicht mehr messen. Für diesen Faktorfehler spricht das Muster (Drift wächst
+mit dem Abstand vom Ursprung), und die Stelle war ohnehin auf ein fremdes Ereignis
+angewiesen.
+
+
+## 0.13.0 — die Meldezeile ist eine Kachel
+
+Sie war der letzte Sonderfall: ein eigener Block je Anzeige, mit `region:` in Zahlen statt
+einer Lage, die man anfassen kann, gezeichnet auf einem eigenen Weg nach allem anderen.
+Jetzt ist sie ein Widget wie jedes andere:
+
+```yaml
+widgets:
+  - type: notify
+    at: [0, 45]
+    size: [128, 8]
+    layer: 1
+```
+
+Damit lässt sie sich in der Vorschau verschieben, anklicken und duplizieren — und es
+können mehrere sein.
+
+**Kanäle und Stufenfilter.** Eine Zeile mit `channel: warnungen` nimmt nur Meldungen
+dieses Kanals (`aton.notify` hat dafür ein Feld bekommen), `show_levels: warning` engt sie
+auf eine Stufe ein. Eine Zeile ohne Kanal ist die Hauptzeile — sie zeigt alles Kanallose
+**und** Meldungen, für deren Kanal es gar keine Zeile gibt. Ein Tippfehler im Kanal darf
+die Meldung nicht spurlos verschlucken; im Betriebs-Reiter steht dazu eine Zeile.
+
+Zwei Meldungen können jetzt gleichzeitig stehen. Vorher wählte die App eine aus, und die
+zweite war unsichtbar — mit nur einer Zeile war das richtig, mit zweien wäre es ein Fehler.
+
+**`layer:` an jeder Kachel.** Gezeichnet wird in Listenreihenfolge, erst das Grundbild,
+dann die Screen-Gruppen. Eine Meldezeile im Grundbild läge also unter einer überlappenden
+Gruppe. Wer höher steht, kommt später dran und liegt oben. Ohne Angabe ändert sich nichts:
+alles steht auf 0, und bei gleicher Ebene bleibt die bisherige Reihenfolge.
+
+**`visible_when:` an jeder Kachel.** Bisher konnte das nur die Meldezeile. Eine fehlerhafte
+Bedingung zeichnet die Kachel trotzdem und meldet den Fehler — eine Kachel, die wegen eines
+Tippfehlers fehlt, sucht man sonst im Bild.
+
+**Der alte Block bleibt gültig.** `notify: {region: [...]}` wird beim Laden in genau so
+eine Kachel übersetzt, samt `layer: 1` — keine Beschreibung muss umgeschrieben werden. Im
+Konfigurator steht am Block ein Knopf **In Kachel umwandeln**; danach ist die Zeile mit der
+Maus zu bewegen. Der Knoten „Benachrichtigungszeile" erscheint nur noch, solange der Block
+in der Datei steht.
+
+⚠ **Nur eine Laufschrift gleichzeitig.** WLED hat ein einziges Scroll-Segment
+(`scroll_segment`). Läuft schon eine Meldung, sagt die zweite Zeile das, statt still nichts
+zu tun.
+
+⚠ **Für eigene Widget-Typen:** die neuen Schlüssel (`layer`, `visible_when`, `channel`,
+`show_levels`, `max_chars`, `max_bar_chars`, `levels`, `scroll_*`) sind jetzt vom
+eingebauten Schema belegt. Ein Plugin mit einem gleichnamigen Feld wird beim Laden
+abgelehnt — mit Dateiname und Grund, wie gehabt.
+
+Nebenbei: das Formular zeigt typgebundene Felder nur beim passenden Typ. `Bilddatei` stand
+bisher auch an einer Uhr; mit den acht Meldungsfeldern wäre das Formular jeder Kachel
+unbrauchbar lang geworden. Gefiltert wird nur die Anzeige — die Prüfung bleibt eine flache
+Schlüsselmenge, sonst wäre jeder Typwechsel wieder eine Sackgasse (siehe 0.12.5).
+
+
+## 0.12.6 — ein gesetztes Symbol war eine Einbahnstraße
+
+Im Symbolfeld setzte jeder Klick einen Namen; einen leeren Zustand gab es im Gitter nicht.
+Wer einmal ein Symbol gewählt hatte — oder es vom Gerüst einer neuen Kachel geerbt hatte —
+bekam `icon:` nur noch im YAML-Editor wieder heraus.
+
+Sichtbar wurde das bei Typen, die überhaupt kein Symbol zeichnen (`clock_wd`, `calendar`):
+dort blieben `icon:` und `text:` des vorherigen Typs als Ballast in der Datei stehen, ohne
+Wirkung aufs Bild — im Strukturbaum stand dann `„clock_wd"` in Anführungszeichen, weil der
+Baum den `text:` zeigt, sobald einer da ist.
+
+Jetzt steht als erste Kachel im Gitter „kein Symbol"; sie löscht den Schlüssel.
+
+Zweitens las das Symbol-/Farbfeld seinen Wert nur beim Aufbau des Formulars. Ein Wechsel
+der Form (fest / map / steps / Vorlage) löscht den Eintrag — danach zeigte das Gitter
+weiterhin ein Symbol als aktiv, das in der Datei gar nicht mehr stand. Der Wert wird jetzt
+bei jedem Zeichnen frisch gelesen.
+
+
+## 0.12.5 — der Typwechsel war eine Sackgasse
+
+Wer ein Widget auf einen eigenen Typ stellte, dessen Felder ausfüllte und dann auf einen
+anderen Typ wechselte, bekam die ganze Beschreibung abgelehnt:
+
+    unbekannte Schluessel: sensor — erlaubt sind: align, at, attribute, …
+
+Die Meldung stimmte und half trotzdem nicht: `sensor` hat man nie von Hand geschrieben,
+und im Formular war das Feld mit dem alten Typ verschwunden. Herausgeführt hat nur noch
+der YAML-Editor.
+
+Jetzt räumt der Konfigurator beim Typwechsel die Schlüssel des alten Typs mit weg. Was der
+neue Typ ebenfalls kennt, bleibt stehen — zwei Plugins dürfen sich ein `sensor` teilen.
+
+Und für von Hand bearbeitete Dateien sagt die Meldung, woher der Schlüssel stammt:
+
+    unbekannte Schluessel: sensor — sensor gehoert zu type: bargraph. Beim Wechsel des
+    Typs bleiben die Schluessel des alten stehen; hier sind sie zu loeschen — erlaubt …
+
+Ein echter Tippfehler bleibt eine schlichte Meldung ohne diesen Zusatz; sonst wäre er
+Rauschen. Zwei Tests halten beides fest.
+
+
+## 0.12.4 — die Fehlermeldung steht jetzt dort, wo man hinsieht
+
+0.12.3 hat die Meldung eingeblendet — sie stand aber **unter** der Bühne, und bei einem
+hohen Panel (64×128) ist die Vorschauspalte höher als das Fenster. Eingeblendet und
+trotzdem außerhalb des Bildes: aus Sicht des Benutzers unverändert nichts.
+
+Die Meldung sitzt jetzt **über** der Bühne, direkt unter der Überschrift — ausgeblendet
+nimmt sie keinen Platz weg, es kostet also nichts. Zusätzlich holt sie sich beim Wechsel
+von unsichtbar zu sichtbar in den Blick, aber nur dann: bei jedem Tastendruck zu scrollen
+würde die Seite unruhig machen.
+
+⚠ Lehre: `display !== 'none'` ist nicht „der Benutzer sieht es".
+
+
+## 0.12.3 — abgelehnte Entwürfe sagen endlich, warum
+
+Lehnte der Loader einen Entwurf ab, behielt die Vorschau stumm das alte Bild. Die
+Begründung wurde berechnet und in das Meldungsfeld geschrieben — nur blieb dessen
+`display` auf `none`, weil der Fehlerzweig es als einziger nie gesetzt hat. Auf dem Schirm
+sah das aus, als passiere gar nichts.
+
+Aufgefallen an einem eigenen Widget-Typ, dem das Pflichtfeld fehlte: „bargraph ausgewählt,
+in der Vorschau ändert sich nichts". Im DOM stand die ganze Zeit
+`panels[2].widgets[0].sensor: fehlt — type: bargraph braucht es`.
+
+⚠ Der Fehler steckt seit dem Umbau auf Aton (0.8.0) drin und trifft **jede** abgelehnte
+Beschreibung, nicht nur eigene Typen.
+
+
+## 0.12.2 — eigener Typ war im Schema, aber nicht im Klappfeld
+
+0.12.0 hat `widget_typen` um die eigenen Typen ergänzt — die Liste stimmte, das
+Auswahlfeld blieb trotzdem bei den eingebauten. Grund: die Oberfläche baut ein
+`auswahl`-Feld aus `optionen` **des Feldes** (`feldBauen` in konfigurator.js), und
+`optionen` des Feldes `type` zeigte weiter auf die unveränderte `WIDGET_TYPEN`.
+
+Der eigene Typ war damit im Schema vorhanden, im Protokoll geladen — und im Konfigurator
+nicht auswählbar. Von außen sah das nach einem Zwischenspeicher aus, und man sucht an der
+falschen Stelle.
+
+Ein Test hält beides fest: der Typ steht im Klappfeld, und die eingebaute Modulliste
+wächst dabei nicht mit (ein `append` darauf würde sich über alle Aufrufe aufsummieren).
+
+
+## 0.12.1 — „Neu einlesen" im Konfigurator
+
+Eine frisch abgelegte Datei in `/config/aton_widgets` war nur über einen **Neustart der
+App** zu bekommen. Serverseitig werden die Register sonst allein beim Start und beim
+Speichern der Beschreibung neu gelesen — und selbst danach blieb der neue Typ unsichtbar,
+weil die Seite ihre Typliste seit dem Aufbau festhält.
+
+Der Knopf **Neu einlesen** macht beides: erst liest der Server Beschreibung, Schriften,
+Symbole und eigene Widget-Typen neu ein, dann holt die Seite ihr Schema nach. 0.12.0 hat
+den Mechanismus mitgebracht, aber keinen Weg, ihn zu benutzen — der Endpunkt `/api/reload`
+war da und hatte keinen einzigen Aufrufer.
+
+⚠ Einlesen baut die Anzeigen neu auf: Handauswahl und laufende Meldungen setzen zurück.
+Ungespeicherte Änderungen im Konfigurator gehen dabei verloren — es wird vorher gefragt.
+
+## 0.12.0 — eigene Widget-Typen, und die Uhr ohne Wochentagsbalken
+
+**Eigene Typen.** Python-Dateien in `/config/aton_widgets` bringen neue Widget-Typen mit.
+Eine Datei meldet nicht nur eine Zeichenfunktion an, sondern **ihre Felder** — und aus
+derselben Deklaration zieht die Prüfung beim Laden ihre erlaubten Schlüssel und der
+Konfigurator sein Eingabeformular. Ein Tippfehler in einem eigenen Schlüssel wird damit
+gemeldet und nicht verschluckt.
+
+```python
+from aton_api import Feld, widget
+
+@widget("dot", felder=[Feld("sensor", "entitaet", "Sensor", pflicht=True)])
+def zeichne(bild, w, ctx):
+    ...
+```
+
+⚠ Die neue App-Option **`custom_widgets` ist aus als Vorgabe**. `aton_fonts` und
+`aton_icons` lesen Daten — dieses Verzeichnis führt Code aus, und das darf nicht dadurch
+passieren, dass jemand eine Datei ablegt. Steht sie auf `false`, wird der Ordner gar nicht
+erst gelesen, und ein unbekannter Typ in der Beschreibung sagt genau das dazu.
+
+★ Die Felder der Art `entitaet` sind nicht nur Beschriftung: aus ihnen entstehen die
+Abonnements bei Home Assistant. Ein Sensor, den ein Plugin auf anderem Weg liest, wird
+nicht abonniert — das Widget zeichnet dann nie neu und sieht dabei nicht kaputt aus.
+
+Fehler kosten nie mehr als ihre Stelle: eine Datei, die sich nicht importieren lässt, hält
+die anderen nicht auf; eine Ausnahme beim Zeichnen kostet ihre Kachel für dieses Bild. Die
+Meldung nennt jeweils die **Datei**, nicht nur die Stelle in der YAML.
+
+**`clock` gibt es jetzt zweimal.** `clock` zeichnet nur noch HH:MM, der Wochentagsbalken
+sitzt in `clock_wd`.
+
+⚠ **Nicht abwärtskompatibel:** jedes bestehende `type: clock` verliert den Balken, ohne
+Fehlermeldung. Wer ihn behalten will, schreibt `clock_wd`. Die mitgelieferten Beispiele
+sind nachgezogen.
+
 ## 0.11.8 — die App sagt jetzt, welchen Stand sie hat
 
 `/api/panels` liefert zusätzlich `version`. Die Begleit-Integration trägt sie als
@@ -530,8 +1109,8 @@ im engeren Sinne — die App hat wirklich ins Leere gesendet. Am Gerät gemessen
 
 ```
 20:10:18.86  script.lrtogglesidematrix → on    (Klick)
-20:10:19.02  switch.liv_sidematrix     → on    (Strom an)
-20:10:39.06  light.hub75_matrix_haupt  → on    (WLED im Netz, 20 s später)
+20:10:19.02  switch.matrix_relay     → on    (Strom an)
+20:10:39.06  light.matrix_power  → on    (WLED im Netz, 20 s später)
 ```
 
 In diesen 20 Sekunden steht das Tor auf `unavailable`. Dann greift der Rückfall auf den

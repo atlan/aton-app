@@ -1,5 +1,5 @@
 name: Aton
-version: "0.11.8"
+version: "0.20.2"
 slug: aton
 description: >-
   Renders LED matrix displays (WLED/HUB75) from a YAML description:
@@ -27,6 +27,10 @@ map:
 options:
   config_file: aton.yaml
   log_level: info
+  custom_widgets: false
 schema:
   config_file: str
   log_level: list(trace|debug|info|warning|error)
+  # Fuehrt Python-Dateien aus /config/aton_widgets aus. Bewusst aus als Vorgabe: alles
+  # andere hier liest Daten, das hier fuehrt fremden Code im Container aus.
+  custom_widgets: bool

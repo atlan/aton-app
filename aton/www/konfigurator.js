@@ -104,10 +104,28 @@ async function laden(sprache) {
   const sd = await (await fetch('api/fonts')).json();
   K.schriften = sd.schriften;
   K.schriftVorgaben = sd.eingebaut || {};
-  K.schmutzig = false;
+  /* Der Server hat veraltete Namen schon im Datenmodell umgeschrieben — in der DATEI
+     stehen sie noch. Das IST eine ungespeicherte Aenderung, und sie muss auch so heissen:
+     der Speichern-Knopf haengt an `K.schmutzig` (`disabled = !K.schmutzig`). Ohne diese
+     Zeile bliebe er aus, und die Umbenennung waere erst zu schreiben, wenn zufaellig
+     etwas anderes geaendert wird — der Hinweis unten waere ein Versprechen ohne Knopf. */
+  K.schmutzig = !!(c.umbenannt && c.umbenannt.length);
   statischeTexte();
   zeichneAlles();
   vorschauHolen();
+  meldungZeigen(c.umbenannt, 'ui.namen_beim_speichern');
+}
+
+/* Liste umbenannter Stellen in die Meldungszeile — gekuerzt, damit eine Datei mit
+   zwanzig alten Schluesseln nicht die halbe Oberflaeche belegt. */
+function meldungZeigen(liste, schluessel) {
+  if (!liste || !liste.length) return;
+  const m = document.getElementById('k-meldung');
+  if (!m) return;
+  const zeigen = liste.slice(0, 5).join(' · ');
+  const rest = liste.length > 5 ? ` (+${liste.length - 5})` : '';
+  m.className = 'k-meldung';
+  m.textContent = `${T(schluessel)} ${zeigen}${rest}`;
 }
 
 function zeichneAlles() { kopfAktualisieren(); baumZeichnen(); formularZeichnen(); }
@@ -135,12 +153,41 @@ function kopfAktualisieren() {
 
   const pruefen = el('button', 'k-knopf', T('ui.pruefen'));
   pruefen.onclick = pruefenLassen;
+  const einlesen = el('button', 'k-knopf', T('ui.einlesen'));
+  einlesen.title = T('ui.einlesen_hilfe');
+  einlesen.onclick = neuEinlesen;
   const speichern = el('button', 'k-knopf k-haupt', T('ui.speichern'));
   speichern.onclick = speichernLassen;
   speichern.disabled = !K.schmutzig;
   const verwerfen = el('button', 'k-knopf', T('ui.verwerfen'));
   verwerfen.onclick = () => laden(K.sprache);
-  k.append(sprachwahl, pruefen, verwerfen, speichern);
+  k.append(sprachwahl, pruefen, einlesen, verwerfen, speichern);
+}
+
+/* Beschreibung UND Register serverseitig neu einlesen — Schriften, Symbole und die
+   eigenen Widget-Typen aus /config/aton_widgets.
+
+   ⚠⚠ Ohne diesen Knopf war eine frisch abgelegte Plugin-Datei nur ueber einen NEUSTART
+   der App zu bekommen: serverseitig werden die Register sonst allein beim Start und beim
+   Speichern neu gelesen. Und selbst danach blieb der neue Typ unsichtbar, weil die Seite
+   ihr Schema seit dem Aufbau festhaelt — deshalb hier BEIDES, erst der Server, dann die
+   Seite. Genau diese Kombination hat einmal eine halbe Stunde gekostet.
+
+   ⚠ `laden()` holt auch die Beschreibung neu und verwirft dabei ungespeicherte
+   Aenderungen — daher dieselbe Rueckfrage wie beim Veraltet-Knopf. */
+async function neuEinlesen() {
+  if (K.schmutzig && !confirm(T('ui.ungespeichert_neu_laden'))) return;
+  let a;
+  try {
+    a = await (await fetch('api/reload', { method: 'POST' })).json();
+  } catch (e) {
+    a = { ok: false };
+  }
+  await laden(K.sprache);
+  const m = document.getElementById('k-meldung');
+  m.style.display = '';
+  m.className = 'k-meldung ' + (a.ok ? 'k-gut' : 'k-fehler');
+  m.textContent = a.ok ? '✓' : T('ui.einlesen_abgelehnt');
 }
 
 /* --- Baum --------------------------------------------------------------- */
@@ -154,10 +201,20 @@ function baumZeichnen() {
   ziel.innerHTML = '';
   const wurzel = el('ul');
 
-  // Pfad zur Auswahl immer aufklappen, sonst sucht man das Ausgewaehlte
-  if (K.auswahl) {
-    for (let i = 1; i <= K.auswahl.length; i++) K.offen.add(schluessel(K.auswahl.slice(0, i)));
-  }
+  /* ⚠⚠ HIER wird NICHTS aufgeklappt. Der Pfad zur Auswahl geht einmalig in `waehle()` auf
+     — beim Klick, nicht bei jedem Zeichnen.
+
+     Vorgeschichte, zweimal am selben Tag falsch repariert: die Schleife stand hier und
+     trug den Pfad der Auswahl bei JEDEM Neuzeichnen wieder ein. Damit war jeder Knoten
+     auf diesem Pfad unzuklappbar — `K.offen.delete(s)` im Pfeil wirkte, und Zeilen
+     spaeter machte die Schleife es rueckgaengig. In 0.13.2 habe ich nur den Knoten SELBST
+     ausgenommen (`i < laenge`); die ELTERN blieben verhaftet, und genau daran ist es dem
+     Benutzer erneut aufgefallen: „Matrix Wohnzimmer Side" liess sich nicht schliessen,
+     solange darin etwas ausgewaehlt war. Im Browser gemessen — `panels/0` stand nach dem
+     Klick unveraendert in `K.offen`.
+
+     Aufklappen ist eine Folge des AUSWAEHLENS, kein Zustand des Zeichnens. Wer das wieder
+     hierher schiebt, nimmt dem Pfeil seine Wirkung. */
 
   wurzel.append(knoten(T('ui.vorgaben'), ['defaults']));
   const fo = K.daten.fonts || {};
@@ -209,7 +266,11 @@ function baumZeichnen() {
     kinder.push(knoten(T('ui.screen_gruppen'), ['panels', pi, 'screen_groups'],
                        String((p.screen_groups || []).length), '', gl,
                        ['panels', pi, 'screen_groups']));
-    kinder.push(knoten(T('ui.notify'), ['panels', pi, 'notify']));
+    /* Den alten Block NUR zeigen, solange er in der Datei steht. Frueher stand der Knoten
+       immer da und legte den Block beim ersten Eintrag an — seit die Meldezeile eine
+       Kachel ist, waere das ein Weg zurueck in die alte Schreibweise, den niemand sucht.
+       Wer den Block hat, findet ihn weiter (samt Knopf zum Umwandeln). */
+    if (p.notify) kinder.push(knoten(T('ui.notify'), ['panels', pi, 'notify']));
 
     wurzel.append(knoten(p.name || p.id, ['panels', pi], T('ui.anzeige'), '', kinder));
   });
@@ -218,6 +279,10 @@ function baumZeichnen() {
 
 /* Beschriftung einer Kachel: das, woran man sie wiedererkennt. */
 function kachelName(w) {
+  /* Eine Meldezeile zeigt NIE den eigenen `text:` — ihr Text kommt aus der Meldung. Zu
+     unterscheiden sind zwei Meldezeilen am Kanal, und nur an dem. Deshalb steht diese
+     Zeile vor der Textabfrage: sonst stuende hier ein `text:`, den der Renderer ignoriert. */
+  if (w.type === 'notify') return w.channel ? `notify:${w.channel}` : 'notify';
   if (w.text) return `“${w.text}”`;
   if (w.value) return w.value.replace(/^[a-z_]+\./, '');
   if (w.template) return (w.icon && typeof w.icon === 'string') ? w.icon : T('ui.vorlage');
@@ -327,11 +392,20 @@ function knoten(beschriftung, pfad, typ, lageText, kinder, neuPfad) {
 }
 
 function waehle(pfad) {
+  // Eine stehende Umzugswarnung gilt fuer die zuletzt verschobene Kachel — wer etwas
+  // anderes anwaehlt, hat sie gelesen oder sie interessiert ihn nicht mehr.
+  // ⚠ Reihenfolge beachten: `kachelVerschieben` ruft ERST `waehle`, setzt die Warnung
+  // DANACH — sonst raeumte diese Zeile sie sofort wieder weg.
+  K.umzugHinweis = '';
   // ⚠ Beide Ebenen vergleichen. Nur der Screen-Name reichte nicht: ein Wechsel zwischen
   // zwei Seiten DESSELBEN Screens aenderte ihn nicht, und die Vorschau blieb stehen.
   const stand = () => JSON.stringify([vorwahlAusAuswahl(), seitenVorwahlAusAuswahl()]);
   const vorher = stand();
   const vorherPanel = panelIndex();
+  // Den ganzen Pfad aufklappen — sonst sucht man das Ausgewaehlte. Aber NUR HIER, beim
+  // Auswaehlen: bei jedem Zeichnen liesse sich anschliessend kein Knoten des Pfades mehr
+  // zuklappen (siehe `baumZeichnen`).
+  for (let i = 1; i <= pfad.length; i++) K.offen.add(schluessel(pfad.slice(0, i)));
   K.auswahl = pfad;
   baumZeichnen();
   formularZeichnen();
@@ -424,6 +498,23 @@ function vorschauAnpassen() {
   }, 150);
 }
 
+/* Eine Meldung nur zum Ansehen — und NUR, solange eine Meldezeile angewaehlt ist.
+
+   Eine Meldezeile ohne anliegende Meldung zeichnet nichts. Wer sie platziert, schoebe also
+   ein unsichtbares Rechteck herum und saehe erst im Betrieb, ob es passt. Dauerhaft eine
+   Beispielmeldung einzublenden waere das andere Extrem: dann stuende in der Vorschau
+   staendig etwas, das es auf der Matrix gar nicht gibt. Deshalb an der Auswahl gebunden. */
+function beispielMeldung() {
+  const w = K.auswahl && hole(K.auswahl);
+  const istBlock = K.auswahl && K.auswahl[K.auswahl.length - 1] === 'notify';
+  if (!w || (w.type !== 'notify' && !istBlock)) return null;
+  const m = { text: T('ui.beispielmeldung'), level: 'info' };
+  // Mit Kanal, sonst zeigte ausgerechnet die angewaehlte Zeile die Meldung nicht.
+  if (w.channel) m.channel = w.channel;
+  if (w.show_levels) m.level = String(w.show_levels).split(',')[0].trim();
+  return m;
+}
+
 async function vorschauHolen() {
   const panel = (K.daten.panels || [])[panelIndex()];
   if (!panel) return;
@@ -432,18 +523,38 @@ async function vorschauHolen() {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ daten: K.daten, panel: panel.id, zoom: K.zoomWunsch,
                            vorwahl: vorwahlAusAuswahl(),
-                           seiten: seitenVorwahlAusAuswahl() }),
+                           seiten: seitenVorwahlAusAuswahl(),
+                           notiz: beispielMeldung() }),
   });
   const p = await antwort.json();
   const meldung = document.getElementById('k-vorschau-meldung');
   if (!p.ok) {
+    /* ⚠⚠ Ohne die naechsten zwei Zeilen blieb die Ablehnung UNSICHTBAR: das Element
+       startet mit `display:none`, und der Zweig darunter ist der einzige, der das je
+       aendert. Wer einen Entwurf baute, den der Loader ablehnt, sah deshalb einfach
+       nichts — die Vorschau behielt stumm das alte Bild, und die Begruendung stand im
+       DOM, wo sie niemand liest.
+
+       ⚠ `display` allein reichte NICHT: bei einem hohen Panel steht die Vorschauspalte
+       ueber die Fensterhoehe hinaus, und die Meldung war zwar eingeblendet, aber
+       ausserhalb des Bildes. Deshalb steht sie jetzt ueber der Buehne (index.html) UND
+       holt sich in den Blick — aber nur beim Wechsel von unsichtbar zu sichtbar, sonst
+       ruckelt die Seite bei jedem Tastendruck im Formular. */
+    const war_versteckt = meldung.style.display === 'none';
     meldung.className = 'k-meldung k-fehler';
     meldung.textContent = p.meldung || T('ui.fehler');
+    meldung.style.display = '';
+    if (war_versteckt) meldung.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     return;
   }
-  meldung.className = 'k-meldung';
-  meldung.textContent = (p.fehler || []).join('\n');
-  meldung.style.display = (p.fehler || []).length ? '' : 'none';
+  /* Ladefehler eigener Widget-Typen kommen VOR den Renderfehlern: sie sind der Grund,
+     warum ein Typ gar nicht erst existiert, und stuenden sonst nur im Protokoll — dort
+     sucht sie niemand, der gerade ein Widget zusammenbaut. */
+  const eigeneFehler = (K.schema && K.schema.widget_eigene_fehler) || [];
+  const zeilen = eigeneFehler.concat(p.fehler || []);
+  meldung.className = 'k-meldung' + (eigeneFehler.length ? ' k-fehler' : '');
+  meldung.textContent = zeilen.join('\n');
+  meldung.style.display = zeilen.length ? '' : 'none';
 
   K.kacheln = p.kacheln; K.zoom = p.zoom; K.groesse = p.groesse;
   const buehne = document.getElementById('k-buehne');
@@ -477,11 +588,41 @@ async function vorschauHolen() {
   };
   bild.onload = kachelnSetzen;
   if (bild.complete && bild.naturalWidth) kachelnSetzen();
+
+  /* ⚠⚠ Der Faktor haengt an `clientWidth`, und die steht erst fest, wenn der Browser das
+     Bild gelegt hat. War sie beim Zeichnen noch 0, greift der Rueckfall `skala = 1` und
+     ALLE Rahmen sitzen um denselben FAKTOR daneben — nicht um einen festen Versatz, sie
+     driften also umso weiter, je weiter rechts und unten sie liegen.
+
+     Bis hierher richtete das erst das naechste Fensterereignis: Groesse aendern,
+     Reiterwechsel (index.html ruft `K.kachelnSetzen`). Am 08.08.2026 vom Benutzer
+     gemeldet — die Kaesten sassen daneben und sprangen erst an ihren Platz, als sich das
+     Fenster umlegte. Auf ein Ereignis zu warten, das mit der Sache nichts zu tun hat, ist
+     die falsche Bedingung; ein Beobachter AM BILD merkt es selbst.
+
+     ⚠ Nur bei tatsaechlich anderer Breite neu setzen. `kachelnSetzen` schreibt in dieselbe
+     Buehne, und ein Beobachter, den die eigene Arbeit erneut ausloest, ist eine Schleife
+     (der Browser meldet sie als „ResizeObserver loop completed…"). */
+  if (K.bildBeobachter) K.bildBeobachter.disconnect();
+  let gelegteBreite = bild.clientWidth;
+  K.bildBeobachter = new ResizeObserver(() => {
+    if (bild.clientWidth === gelegteBreite) return;
+    gelegteBreite = bild.clientWidth;
+    kachelnSetzen();
+  });
+  K.bildBeobachter.observe(bild);
+
   // Beim Verkleinern des Fensters aendert sich der Faktor — sonst laegen die Rahmen
   // nach jedem Ziehen am Fensterrand wieder daneben.
   K.kachelnSetzen = kachelnSetzen;
   K.vorschauAnpassen = vorschauAnpassen;
-  hinweisSetzen();
+  /* ⚠⚠ Die Warnung aus dem letzten Umzug hier setzen — und NICHT loeschen.
+     Zweimal zu kurz gesprungen: erst direkt gesetzt (die Vorschau 350 ms spaeter
+     ueberschrieb sie), dann hier gesetzt und gleich geloescht — `waehle()` loest beim
+     Screenwechsel aber eine EIGENE Vorschau aus, die frueher zurueckkommt: die Warnung
+     blitzte auf und war weg, bevor jemand sie lesen konnte. Sie bleibt jetzt stehen, bis
+     etwas anderes angewaehlt wird (`waehle` raeumt sie weg). */
+  hinweisSetzen(K.umzugHinweis);
 }
 
 /* Kacheln lassen sich ziehen. Raster-Kacheln rasten in Zellen ein, absolut
@@ -607,9 +748,25 @@ function formularZeichnen() {
   ziel.append(form);
 
   const knoten_ = hole(pfad) || {};
-  K.schema[gruppe].forEach(f => form.append(feldBauen(f, pfad, knoten_)));
+  /* ⚠ Felder mit `nur_typ` gehoeren nur zu bestimmten Widget-Typen (`image` zur Bilddatei,
+     die Meldungsfelder zu `notify`). Sie ALLEN Typen zu zeigen, hiess frueher: an einer Uhr
+     stand ein Feld „Bilddatei", das nichts tut — und mit den Meldungsfeldern waere das
+     Formular jeder Kachel um acht wirkungslose Zeilen gewachsen. Gefiltert wird nur die
+     ANZEIGE; die Pruefung bleibt eine flache Schluesselmenge, damit ein Typwechsel nicht
+     wieder zur Sackgasse wird. */
+  const passt = (f) => !f.nur_typ || f.nur_typ.includes(knoten_.type || 'tile');
+  K.schema[gruppe].filter(passt).forEach(f => form.append(feldBauen(f, pfad, knoten_)));
 
   if (gruppe === 'widget') {
+    /* Felder eines eigenen Typs aus /config/aton_widgets. Sie stehen im Widget selbst
+       (nicht in einem Unterzweig), deshalb reicht derselbe Pfad wie oben. */
+    const eigen = (K.schema.widget_eigene || {})[knoten_.type];
+    if (eigen && eigen.felder.length) {
+      form.append(el('h3', null, eigen.name));
+      if (eigen.beschreibung) form.append(el('div', 'k-hilfe', eigen.beschreibung));
+      form.append(el('div', 'k-hilfe', eigen.quelle));
+      eigen.felder.forEach(f => form.append(feldBauen(f, pfad, knoten_)));
+    }
     form.append(el('h3', null, T('ui.beschreibung')));
     K.schema.textquelle.forEach(f => form.append(feldBauen(f, pfad, knoten_)));
   }
@@ -704,6 +861,26 @@ function schriftFormular(ziel) {
   form.append(neu);
 }
 
+/* Beim Wechsel des Typs die Schluessel des ALTEN eigenen Typs mitnehmen.
+
+   ⚠⚠ Sonst bleibt `sensor: …` von einem `bargraph` stehen, und der naechste Typ lehnt die
+   ganze Beschreibung ab: „unbekannte Schluessel: sensor". Die Meldung stimmt und hilft
+   trotzdem nicht — man hat den Schluessel nie von Hand hingeschrieben und kann ihn im
+   Formular auch nicht mehr sehen, weil das Feld mit dem alten Typ verschwunden ist. Ohne
+   dieses Aufraeumen ist der Typwechsel eine Sackgasse, aus der nur der YAML-Editor
+   herausfuehrt.
+
+   Schluessel, die der NEUE Typ ebenfalls kennt, bleiben stehen — zwei Plugins duerfen
+   sich ein `sensor` teilen, ohne dass der Wechsel ihn wegwirft. */
+function typwechselAufraeumen(knoten_, alterTyp, neuerTyp) {
+  const eigene = K.schema.widget_eigene || {};
+  const alt = eigene[alterTyp];
+  if (!alt || alterTyp === neuerTyp) return;
+  const neu = eigene[neuerTyp];
+  const behalten = new Set((neu ? neu.felder : []).map(x => x.name));
+  alt.felder.forEach(x => { if (!behalten.has(x.name)) delete knoten_[x.name]; });
+}
+
 function feldBauen(f, pfad, knoten_) {
   const label = el('label');
   label.append(el('span', 'k-label', f.label + (f.pflicht ? ' *' : '')));
@@ -726,7 +903,15 @@ function feldBauen(f, pfad, knoten_) {
       eingabe.add(new Option('—', ''));
       (f.optionen || []).forEach(o => eingabe.add(new Option(o, o)));
       eingabe.value = wert === undefined ? '' : wert;
-      eingabe.onchange = () => { setze(feldpfad, eingabe.value || undefined); nachAenderung(); };
+      eingabe.onchange = () => {
+        if (f.name === 'type') typwechselAufraeumen(knoten_, wert, eingabe.value);
+        setze(feldpfad, eingabe.value || undefined);
+        /* Der Typ entscheidet, WELCHE Felder darunter stehen — eigene Typen bringen ihre
+           eigenen mit. Ohne das Neuzeichnen bliebe das Formular auf dem alten Typ stehen
+           und man haette die Felder erst nach einem Klick anderswohin und zurueck. */
+        if (f.name === 'type') formularZeichnen();
+        nachAenderung();
+      };
       break;
     }
     case 'schrift': {
@@ -876,6 +1061,15 @@ function entitaetsFeld(wert, beiWahl) {
 function symbolFeld(wert, beiWahl) {
   const huelle = el('div');
   const gitter = el('div', 'k-symbolgitter');
+  /* ⚠ Erste Kachel: KEIN Symbol. Ohne sie kommt man an ein einmal gesetztes `icon:` nie
+     wieder heran — jeder Klick ins Gitter SETZT einen Namen, ein leerer Zustand war gar
+     nicht waehlbar. Getroffen hat es vor allem Typen, die ueberhaupt kein Symbol zeichnen
+     (`clock_wd`, `calendar`): dort blieb ein Symbol des vorherigen Typs als Ballast in der
+     Datei stehen und wurde im Baum als Name der Kachel angezeigt. */
+  const leer = el('div', 'k-leer' + (wert ? '' : ' aktiv'), '—');
+  leer.title = T('ui.kein_symbol');
+  leer.onclick = () => { beiWahl(undefined); formularZeichnen(); };
+  gitter.append(leer);
   K.symbole.forEach(name => {
     const b = el('img');
     b.src = 'api/icons/' + encodeURIComponent(name) + `.png?zoom=5&t=${K.symbolMarke || 0}`;
@@ -906,16 +1100,25 @@ function quellenFeld(f, feldpfad, wert) {
   koerper.style.marginTop = '6px';
   huelle.append(koerper);
 
+  /* ⚠ Den Wert bei JEDEM Zeichnen frisch aus den Daten holen. `wert` stammt aus dem Aufbau
+     des Formulars, und ein Formwechsel loescht den Eintrag (`form.onchange` unten) — danach
+     zeigte das Gitter weiter ein Symbol als aktiv, das in der Datei gar nicht mehr stand. */
+  const jetzt = () => {
+    const w = hole(feldpfad);
+    return [w, w && typeof w === 'object'];
+  };
+
   const zeichne = () => {
     koerper.innerHTML = '';
+    const [w, objekt] = jetzt();
     const art = form.value;
     if (art === 'name') {
       if (f.art === 'symbolquelle') {
-        koerper.append(symbolFeld(typeof wert === 'string' ? wert : (istObjekt ? wert.name : ''),
+        koerper.append(symbolFeld(typeof w === 'string' ? w : (objekt ? w.name : ''),
           v => { setze(feldpfad, v); nachAenderung(); }));
       } else {
         const t = el('input'); t.type = 'text';
-        t.value = typeof wert === 'string' ? wert : '';
+        t.value = typeof w === 'string' ? w : '';
         t.placeholder = 'rrggbb';
         t.onchange = () => { setze(feldpfad, t.value || undefined); nachAenderung(); };
         koerper.append(t);
@@ -924,26 +1127,28 @@ function quellenFeld(f, feldpfad, wert) {
     }
     if (art === 'template') {
       const t = el('textarea');
-      t.value = istObjekt ? (wert.template || '') : '';
+      t.value = objekt ? (w.template || '') : '';
       t.onchange = () => { setze(feldpfad, { template: t.value }); nachAenderung(); };
       koerper.append(t);
       return;
     }
     // map / steps: Entitaet + Zeilenpaare
-    const ent = entitaetsFeld(istObjekt ? wert.value : '', v => {
-      const neu = Object.assign({}, istObjekt ? wert : {}, { value: v });
+    const ent = entitaetsFeld(objekt ? w.value : '', v => {
+      const [a, aObjekt] = jetzt();
+      const neu = Object.assign({}, aObjekt ? a : {}, { value: v });
       setze(feldpfad, neu); nachAenderung();
     });
     koerper.append(ent);
     const tabelle = el('div');
-    const eintraege = Object.entries((istObjekt && wert[art]) || {});
+    const eintraege = Object.entries((objekt && w[art]) || {});
     const schreib = () => {
       const obj = {};
       tabelle.querySelectorAll('.k-paar').forEach(z => {
         const [k, v] = z.querySelectorAll('input');
         if (k.value !== '') obj[k.value] = v.value;
       });
-      const neu = Object.assign({}, istObjekt ? wert : {});
+      const [a, aObjekt] = jetzt();
+      const neu = Object.assign({}, aObjekt ? a : {});
       neu[art] = obj;
       setze(feldpfad, neu); nachAenderung();
     };
@@ -971,6 +1176,88 @@ function quellenFeld(f, feldpfad, wert) {
 }
 
 /* --- Werkzeuge am Knoten ------------------------------------------------ */
+/* Alle Listen, in die eine Kachel umziehen kann: das Grundbild jeder Anzeige und jede
+   Seite jedes Screens. Beschriftet mit dem ganzen Weg, damit bei gleichnamigen Screens in
+   zwei Anzeigen klar ist, welcher gemeint ist. */
+function kachelZiele() {
+  const ziele = [];
+  (K.daten.panels || []).forEach((p, pi) => {
+    const anzeige = p.name || p.id || `#${pi}`;
+    ziele.push({ pfad: ['panels', pi, 'widgets'], text: `${anzeige} › ${T('ui.grundbild')}` });
+    (p.screen_groups || []).forEach((g, gi) => {
+      const gname = g.name || g.id || `#${gi}`;
+      (g.screens || []).forEach((sc, si) => {
+        const basis = ['panels', pi, 'screen_groups', gi, 'screens', si];
+        if (Array.isArray(sc.seiten) && sc.seiten.length) {
+          sc.seiten.forEach((se, sj) => ziele.push({
+            pfad: basis.concat(['seiten', sj, 'widgets']),
+            text: `${anzeige} › ${gname} › ${sc.name || si} › ${se.name || `${T('ui.seiten')} ${sj + 1}`}`,
+          }));
+        } else {
+          ziele.push({ pfad: basis.concat(['widgets']),
+                       text: `${anzeige} › ${gname} › ${sc.name || si}` });
+        }
+      });
+    });
+  });
+  return ziele;
+}
+
+/* Passt die Kachel dort ueberhaupt hin? Verschoben wird trotzdem — aber gesagt wird es.
+
+   ⚠ Zwei verschiedene Fragen: die Flaeche der ANZEIGE (harte Grenze, was darueber hinaus
+   liegt, zeichnet nie) und der Bereich der SCREEN-GRUPPE (weiche Grenze: gezeichnet wird
+   es, aber die Gruppe tauscht nur ihren `region`-Ausschnitt aus — eine Kachel ausserhalb
+   bliebe beim Screenwechsel stehen). */
+function kachelPasstNicht(kachel, zielPfad) {
+  const pi = zielPfad[1];
+  const panel = (K.daten.panels || [])[pi];
+  if (!panel || !Array.isArray(panel.size)) return '';
+  const g = panel.grid || {};
+  const spalte = g.col_width || 32, zeile = g.row_height || 9;
+  let x, y;
+  if (Array.isArray(kachel.cell)) { y = kachel.cell[0] * zeile; x = kachel.cell[1] * spalte; }
+  else if (Array.isArray(kachel.at)) { [x, y] = kachel.at; }
+  else return '';
+  const [b, h] = Array.isArray(kachel.size) ? kachel.size : [spalte, 8];
+  const [pb, ph] = panel.size;
+
+  if (x < 0 || y < 0 || x + b > pb || y + h > ph) {
+    return T('ui.ausserhalb_flaeche').replace('%s', `${pb}×${ph}`);
+  }
+  if (zielPfad[2] === 'screen_groups') {
+    const r = ((panel.screen_groups || [])[zielPfad[3]] || {}).region;
+    if (Array.isArray(r) && (x < r[0] || y < r[1] || x + b > r[0] + r[2] || y + h > r[1] + r[3])) {
+      return T('ui.ausserhalb_bereich').replace('%s', r.join(', '));
+    }
+  }
+  return '';
+}
+
+function kachelVerschieben(vonPfad, zielPfad) {
+  const quelle = hole(vonPfad.slice(0, -1));
+  const index = vonPfad[vonPfad.length - 1];
+  if (!Array.isArray(quelle)) return;
+  // ⚠ Die Zielliste kann fehlen (Screen ohne `widgets:`) — `setze` legt fehlende Stufen an.
+  if (!Array.isArray(hole(zielPfad))) setze(zielPfad, []);
+  const ziel = hole(zielPfad);
+
+  const kachel = quelle.splice(index, 1)[0];
+  ziel.push(kachel);
+  K.schmutzig = true;
+
+  const warnung = kachelPasstNicht(kachel, zielPfad);
+  const neuerPfad = zielPfad.concat([ziel.length - 1]);
+  waehle(neuerPfad);
+  zeichneAlles();
+  /* ⚠ Den Hinweis NICHT direkt setzen: `nachAenderung` holt 350 ms spaeter die Vorschau,
+     und die setzt die Hinweiszeile auf ihren Standardtext zurueck — die Warnung war nach
+     einem Wimpernschlag wieder weg (beim Testen genau so erlebt). Sie reist deshalb als
+     `K.umzugHinweis` mit und wird von `vorschauHolen` gesetzt, wenn das neue Bild steht. */
+  K.umzugHinweis = warnung;
+  nachAenderung();
+}
+
 function werkzeugZeile(pfad, gruppe) {
   const z = el('div', 'k-zeile');
   const vorletzter = pfad[pfad.length - 2];
@@ -1000,6 +1287,29 @@ function werkzeugZeile(pfad, gruppe) {
     z.append(rauf, runter, kopie, weg);
   }
 
+  /* Umzug in eine andere Liste — ↑/↓ kommen nur INNERHALB einer Liste voran. Damit geht
+     „aus dem Grundbild in eine Screen-Gruppe" und auch der Wechsel zwischen zwei Anzeigen.
+     ⚠ Koordinaten bleiben unveraendert; ob die Kachel im Ziel noch im Bild liegt, prueft
+     `kachelPasstNicht` und sagt es in der Hinweiszeile. Umgerechnet wird BEWUSST nicht:
+     eine Kachel, die woanders landet als dort, wo man sie hingeschoben hat, ueberrascht. */
+  if (vorletzter === 'widgets' && typeof index === 'number') {
+    const eigenerPfad = schluessel(pfad.slice(0, -1));
+    const ziele = kachelZiele().filter(zi => schluessel(zi.pfad) !== eigenerPfad);
+    if (ziele.length) {
+      const zeile = el('div', 'k-zeile');
+      zeile.style.marginTop = '6px';
+      const wahl = el('select');
+      wahl.add(new Option(T('ui.verschieben_nach'), ''));
+      ziele.forEach(zi => wahl.add(new Option(zi.text, schluessel(zi.pfad))));
+      wahl.onchange = () => {
+        const treffer = ziele.find(zi => schluessel(zi.pfad) === wahl.value);
+        if (treffer) kachelVerschieben(pfad, treffer.pfad);
+      };
+      zeile.append(wahl);
+      z.append(zeile);
+    }
+  }
+
   // Wo man gerade steht, entscheidet, WOHIN eine neue Kachel gehoert.
   const kachelziel = vorletzter === 'widgets' ? pfad.slice(0, -1)
                    : (gruppe === 'screen' || gruppe === 'panel') ? pfad.concat(['widgets'])
@@ -1026,7 +1336,41 @@ function werkzeugZeile(pfad, gruppe) {
     neu.onclick = () => anlegen(['panels']);
     z.append(neu);
   }
+  if (gruppe === 'notify' && hole(pfad)) {
+    const um = el('button', 'k-knopf', T('ui.in_kachel_umwandeln'));
+    um.title = T('ui.in_kachel_umwandeln_hilfe');
+    um.onclick = () => notifyZuKachel(pfad);
+    z.append(um);
+  }
   return z;
+}
+
+/* Den alten Block `notify:` in eine Kachel `type: notify` umschreiben.
+
+   Die App versteht beide Schreibweisen — der Block wird beim Laden ohnehin uebersetzt.
+   Was er NICHT kann: sich in der Vorschau anfassen lassen. Seine Lage steht als `region:`
+   in Zahlen da, waehrend jede Kachel mit der Maus liegt, wo sie liegen soll. Genau deshalb
+   dieser Knopf — ein Weg von der alten in die neue Schreibweise, ohne YAML-Editor. */
+function notifyZuKachel(pfad) {
+  const block = hole(pfad);
+  if (!block || !Array.isArray(block.region)) return;
+  const [x, y, breite, hoehe] = block.region;
+  const kachel = { type: 'notify', at: [x, y], size: [breite, hoehe] };
+  // ⚠ `layer: 1` MUSS mit: der Block lag im Renderer immer ueber den Screen-Gruppen, eine
+  // Kachel auf Ebene 0 laege darunter. Ohne diese Zeile waere die Meldung nach dem
+  // Umwandeln je nach Aufbau schlicht verdeckt — und das saehe aus wie „kommt nicht an".
+  kachel.layer = 1;
+  Object.keys(block).forEach(k => { if (k !== 'region') kachel[k] = block[k]; });
+
+  const panelpfad = pfad.slice(0, -1);
+  const panel = hole(panelpfad);
+  if (!Array.isArray(panel.widgets)) panel.widgets = [];
+  panel.widgets.push(kachel);
+  delete panel.notify;
+  K.schmutzig = true;
+  waehle(panelpfad.concat(['widgets', panel.widgets.length - 1]));
+  zeichneAlles();
+  nachAenderung();
 }
 
 let warten = null;
@@ -1066,6 +1410,11 @@ async function speichernLassen() {
   K.mtime = a.mtime; K.schmutzig = false;
   m.className = 'k-meldung k-gut';
   m.textContent = `${T('ui.gespeichert')} · ${T('ui.gesichert_als')} ${a.sicherung}`;
+  if (a.umbenannt && a.umbenannt.length) {
+    m.textContent += ` · ${T('ui.namen_umgeschrieben')} `
+                   + a.umbenannt.slice(0, 5).join(' · ')
+                   + (a.umbenannt.length > 5 ? ` (+${a.umbenannt.length - 5})` : '');
+  }
   kopfAktualisieren();
 }
 

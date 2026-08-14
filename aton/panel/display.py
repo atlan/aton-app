@@ -24,6 +24,32 @@ _LOG = logging.getLogger(__name__)
 #: nicht hochkommt, zeitnah wieder ehrlich meckert.
 HOCHLAUF_S = 60.0
 
+#: Wie lange auf ein `on` der Tor-Entitaet gewartet wird, bevor trotzdem gesendet wird.
+#:
+#: ★★ Das Tor IST der Erreichbarkeitsmelder — HAs WLED-Anbindung setzt es erst auf `on`,
+#: wenn sie mit dem Geraet spricht. Am 14.08.2026 an beiden Wohnzimmer-Matrizen gemessen:
+#:
+#:     Strom `switch.matrix_relay` on   11:21:18,33
+#:     Tor   `light.matrix_power`   11:21:38,59      →  20,3 s spaeter
+#:     Strom `switch.matrix_tv_relay`   on   10:43:20,08
+#:     Tor   `…_matrix_tv_power`      on   10:43:38,01      →  17,9 s spaeter
+#:
+#: Die App startete bisher auf der Sekunde des STROMSCHALTERS (ueber `gate.fallback`) und
+#: schickte 20 Sekunden lang Vollbilder ins Leere. Der Rueckfall war als NOTAUSGANG
+#: gedacht (ohne zweites Segment legt HA den Hauptschalter nicht an — siehe
+#: `freigegeben()`), wurde aber als BESCHLEUNIGER benutzt und hat den Melder ueberholt.
+#:
+#: ⚠ 90 s waren aus einer Stichprobe von ZWEI gewaehlt. Beim Nachweis am selben Tag hat
+#: dieselbe Anzeige **95 s** gebraucht (Skript: 20 s feste Wartezeit + HAs Einrichtung des
+#: Konfigurationseintrags). Zu knapp ist billig — es kostet eine Probe, dann greift der
+#: Rueckzug —, aber deshalb ist der Wert je Anzeige einstellbar (`gate.wartezeit`).
+#: Dies hier ist nur die Vorgabe.
+NOTAUSGANG_S = 90.0
+
+#: Obergrenze des Rueckzugs nach einem gescheiterten Sendeversuch. Ohne ihn hat die App
+#: am 14.08.2026 eine stromlose Matrix 7,5 Stunden lang im 5-Sekunden-Takt angerufen.
+RUECKZUG_MAX_S = 60.0
+
 
 @dataclass
 class Notiz:
@@ -32,6 +58,8 @@ class Notiz:
     bis: float | None = None
     prio: int = 1
     lfd: int = 0
+    # In welche Meldezeile sie gehoert. None = Hauptzeile (jede Zeile ohne eigenen Kanal).
+    channel: str | None = None
 
 
 class Display:
@@ -52,12 +80,24 @@ class Display:
         self._gesetzte_helligkeit: tuple[int | None, float] = (None, 0.0)
         self.letztes_ergebnis: RenderErgebnis | None = None
         self.letzter_lauf: float = 0.0
+        # Einmal gerechnetes Bild fuer eine Anzeige, die seit dem Start nie lief —
+        # siehe `vorschaubild()`.
+        self._kaltes_bild = None
         # War die Anzeige beim vorigen Takt freigegeben? Der Wechsel aus/ein erzwingt ein
         # Vollbild. Startwert False: beim allerersten Takt weiss die App ohnehin nicht,
         # was auf dem Geraet steht — also gleich die ganze Flaeche beschreiben.
         self._war_frei = False
         # Wann wurde zuletzt eingeschaltet? Bezugspunkt fuer die Hochlauf-Nachsicht.
         self._frei_seit = 0.0
+        # Seit wann meldet die Tor-Entitaet kein `on`? 0 = sie meldet es. Bezugspunkt
+        # fuer den Notausgang.
+        self._tor_nicht_on_seit = 0.0
+        # Fruehester naechster Sendeversuch (Unix-Zeit) und die aktuelle Rueckzugsdauer.
+        self._naechster_versuch = 0.0
+        self._rueckzug = 0.0
+        # Warum gerade nicht gesendet wird — Klartext fuer die Oberflaeche. Leer = es
+        # wird gesendet.
+        self.sendepause = ""
 
     # ==================================================================
     #  Anmeldung
@@ -144,7 +184,10 @@ class Display:
         self._lfd += 1
         nid = str(d.get("id") or f"n{self._lfd}")
         level = str(d.get("level", "info")).lower()
-        if level not in self.cfg.notify.levels:
+        # ⚠ Gegen die Stufen ALLER Meldezeilen geprueft, nicht gegen eine einzelne: seit
+        # 0.13.0 darf jede Zeile eigene Stufen mitbringen, und eine Meldung fuer die zweite
+        # Zeile faende sich sonst stillschweigend auf `info` zurueckgesetzt.
+        if level not in self.cfg.notify_levels:
             level = "info"
 
         try:
@@ -156,33 +199,48 @@ class Display:
         except (TypeError, ValueError):
             prio = 2 if level == "warning" else 1
 
+        kanal = d.get("channel")
         self._notizen[nid] = Notiz(
             text=str(d.get("text", "")),
             level=level,
             bis=(time.time() + dauer) if dauer > 0 else None,
             prio=prio,
             lfd=self._lfd,
+            channel=(str(kanal).strip() or None) if kanal else None,
         )
         self._sofort.set()
         return nid
 
-    def notiz_loeschen(self, nid: str | None = None) -> None:
-        """Eine Meldung loeschen — ohne Kennung alle."""
-        if not nid:
-            self._notizen.clear()
-        else:
+    def notiz_loeschen(self, nid: str | None = None, channel: str | None = None) -> None:
+        """Eine Meldung loeschen — nach Kennung, nach Kanal, ohne beides alle."""
+        if nid:
             self._notizen.pop(str(nid), None)
+        elif channel:
+            for k, n in list(self._notizen.items()):
+                if n.channel == channel:
+                    del self._notizen[k]
+        else:
+            self._notizen.clear()
         self._sofort.set()
 
-    def _aktive_notiz(self) -> dict | None:
+    def _aktive_notizen(self) -> list[dict]:
+        """Alle laufenden Meldungen, die dringendste zuerst.
+
+        ⚠ Nicht mehr nur die eine beste: mit mehreren Meldezeilen entscheidet erst der
+        Renderer, welche Meldung wohin gehoert — eine Warnung in der Warnzeile UND eine
+        Information in der Hauptzeile sind seit 0.13.0 gleichzeitig moeglich. Waehlte diese
+        Stelle weiterhin vor, bliebe die zweite Zeile fuer immer leer.
+        """
         jetzt = time.time()
         for nid, n in list(self._notizen.items()):
             if n.bis is not None and n.bis <= jetzt:
                 del self._notizen[nid]
-        if not self._notizen:
-            return None
-        beste = max(self._notizen.values(), key=lambda n: (n.prio, n.lfd))
-        return {"text": beste.text, "level": beste.level}
+        sortiert = sorted(self._notizen.values(), key=lambda n: (n.prio, n.lfd), reverse=True)
+        return [{"text": n.text, "level": n.level, "channel": n.channel} for n in sortiert]
+
+    def _aktive_notiz(self) -> dict | None:
+        alle = self._aktive_notizen()
+        return alle[0] if alle else None
 
     @property
     def vorwahl(self) -> dict[str, str | None]:
@@ -190,7 +248,34 @@ class Display:
         return dict(self._vorwahl)
 
     def aktive_notiz(self) -> dict | None:
+        """Die dringendste Meldung — fuer die Zustandsanzeige der Oberflaeche."""
         return self._aktive_notiz()
+
+    def aktive_notizen(self) -> list[dict]:
+        return self._aktive_notizen()
+
+    def vorschaubild(self):
+        """Das Bild fuer die Betriebsansicht — was zuletzt GERECHNET wurde.
+
+        ★★ Solange die Anzeige laeuft, ist das schlicht `letztes_ergebnis`. Ist sie aus,
+        hat der Takt nie gerechnet, und frueher rechnete dieser Endpunkt bei JEDEM Abruf
+        neu — die Betriebsansicht pollt alle 3 s, und weil im Bild Uhr und Live-Werte
+        stehen, aenderte sich die Vorschau einer ABGESCHALTETEN Matrix munter weiter.
+
+        ⚠ Das trat nur auf, wenn die Anzeige seit dem Start der App noch nie gelaufen
+        war — danach steht ja ein Ergebnis bereit und die Vorschau steht still. Genau
+        daher das „manchmal" in der Meldung des Users (14.08.2026).
+
+        Jetzt wird das kalte Bild EINMAL gerechnet und behalten. Es bleibt getrennt von
+        `letztes_ergebnis`, damit `letzter_lauf` und die Screen-Anzeige nicht behaupten,
+        es habe ein Takt stattgefunden.
+        """
+        if self.letztes_ergebnis is not None:
+            self._kaltes_bild = None
+            return self.letztes_ergebnis.bild
+        if self._kaltes_bild is None:
+            self._kaltes_bild = self.renderer.frame(self.vorwahl, self.aktive_notizen()).bild
+        return self._kaltes_bild
 
     # ==================================================================
     #  Tor und Helligkeit
@@ -352,13 +437,17 @@ class Display:
             # Der kumulative Zaehler `fehler` bleibt unangetastet: dass es geknirscht hat,
             # soll sichtbar bleiben.
             self.transport.stat.letzter_fehler = ""
+            self._tor_nicht_on_seit = 0.0
+            self._naechster_versuch = 0.0
+            self._rueckzug = 0.0
+            self.sendepause = ""
             return
         async with self._lock:
             # ★ Die Sperre umschliesst Bauen UND Senden. Der Frame wird in Bloecken
             # geschickt; jedes await dazwischen waere sonst eine Stelle, an der ein
             # zweiter Render (Umschalten, Benachrichtigung) dazwischenfunkt und auf der
             # Matrix ein Mischbild entsteht. Am Vorgaenger als Flackern beobachtet.
-            ergebnis = self.renderer.frame(self._vorwahl, self._aktive_notiz())
+            ergebnis = self.renderer.frame(self._vorwahl, self._aktive_notizen())
             self.letztes_ergebnis = ergebnis
             self.letzter_lauf = time.time()
             if self.cfg.dry_run:
@@ -367,8 +456,16 @@ class Display:
                 # Screen greift und ob der Bildaufbau fehlerfrei durchlaeuft.
                 self.transport.stat.frames += 1
             else:
+                darf, probe, grund = self._sendefenster()
+                self.sendepause = grund
+                # ★ Gerechnet und gezeichnet wird trotzdem — nur geschickt wird nicht.
+                # Sonst friere die Vorschau im Betriebs-Reiter ein, und man saehe nicht
+                # mehr, was die App gerade darstellen WUERDE.
+                if not darf:
+                    return
                 await self.transport.sende(session, ergebnis.bild, self.helligkeit(),
-                                           ergebnis.scroll_text)
+                                           ergebnis.scroll, probe=probe)
+                self._rueckzug_fortschreiben()
                 if self._faehrt_hoch():
                     # ★★ Waehrend das Geraet hochfaehrt sind Zeitueberschreitungen die
                     # Regel, keine Stoerung — sie als roten Kasten zu zeigen erschreckt
@@ -382,6 +479,61 @@ class Display:
                     # Der Zaehler `fehler` bleibt stehen: dass es geknirscht hat, soll
                     # sichtbar bleiben, nur eben nicht als Alarm.
                     self.transport.stat.letzter_fehler = ""
+
+    def _sendefenster(self) -> tuple[bool, bool, str]:
+        """Darf JETZT gesendet werden? Rueckgabe: (darf, ist_probe, Grund der Pause).
+
+        ★★ `freigegeben()` beantwortet „darf gezeichnet werden?" — eine Zustandsfrage an
+        Home Assistant. Bis 0.19.2 wurde die Antwort benutzt, als haette sie „kann
+        gesendet werden?" beantwortet, und das ist etwas anderes: beim Einschalten liegt
+        20 Sekunden lang Strom an, bevor WLED im Netz ist (Messung siehe `NOTAUSGANG_S`).
+
+        Die Trennung hier:
+
+        * Tor meldet `on`   → HA spricht mit dem Geraet, also senden. Normalfall.
+        * Tor meldet es nicht (unavailable/unknown/fehlt) → bis zu `NOTAUSGANG_S` warten.
+          Das deckt den Hochlauf ab, ohne einen einzigen Versuch ins Leere.
+        * Danach trotzdem einmal versuchen, aber als **Probe** — genau dieser Versuch
+          loest die Henne-Ei-Falle aus `freigegeben()`: ohne zweites Segment legt HA den
+          Hauptschalter nicht an, und erst das Zeichnen legt das Segment an. Klappt er,
+          ordnet sich alles von selbst; klappt er nicht, gilt das Geraet als weg.
+
+        `_naechster_versuch` steht ueber allem: nach einem gescheiterten Versuch wird
+        zurueckgezogen, egal auf welchem Weg er zustande kam.
+        """
+        jetzt = time.time()
+        if jetzt < self._naechster_versuch:
+            return False, False, f"Rueckzug, naechster Versuch in {self._naechster_versuch - jetzt:.0f} s"
+
+        p = self.cfg
+        # Ohne Tor gibt es nichts, worauf man warten koennte — dann wie bisher senden.
+        tor = self.ha.state(p.gate_entity) if p.gate_entity else "on"
+        if tor == "on":
+            self._tor_nicht_on_seit = 0.0
+            return True, False, ""
+
+        if not self._tor_nicht_on_seit:
+            self._tor_nicht_on_seit = jetzt
+        wartet = jetzt - self._tor_nicht_on_seit
+        frist = p.gate_wartezeit
+        if wartet < frist:
+            return False, True, f"wartet auf {p.gate_entity} (noch {frist - wartet:.0f} s)"
+        return True, True, ""
+
+    def _rueckzug_fortschreiben(self) -> None:
+        """Nach dem Senden: bei Erfolg zurueck in den Takt, sonst weiter zurueckziehen.
+
+        Verdoppelnd bis `RUECKZUG_MAX_S`, Start beim doppelten Takt — bei 5 s also
+        10, 20, 40, 60, 60 … Ein Geraet, das ueber Nacht stromlos ist, wird damit
+        stuendlich 60-mal angerufen statt 720-mal.
+        """
+        if self.transport.stat.erreichbar:
+            self._rueckzug = 0.0
+            self._naechster_versuch = 0.0
+            return
+        self._rueckzug = min(RUECKZUG_MAX_S,
+                             max(self.cfg.interval * 2, self._rueckzug * 2))
+        self._naechster_versuch = time.time() + self._rueckzug
 
     def _faehrt_hoch(self) -> bool:
         """Faehrt das Geraet gerade hoch — sind Sendefehler also zu erwarten?

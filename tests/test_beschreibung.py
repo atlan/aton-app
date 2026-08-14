@@ -62,13 +62,13 @@ def test_unbekannter_schluessel_faellt_auf():
 def test_der_pfad_zeigt_auf_die_stelle():
     roh = anzeige(screen_groups=[{
         "id": "g", "region": [0, 0, 32, 16],
-        "screens": [{"name": "A", "seiten": [{"name": "x", "zyklenn": 2}, {"name": "y"}]}],
+        "screens": [{"name": "A", "pages": [{"name": "x", "cyclesn": 2}, {"name": "y"}]}],
     }])
     with pytest.raises(ConfigError) as e:
         pruefe(roh, "t")
     meldung = str(e.value)
-    assert "screen_groups[0].screens[0].seiten[0]" in meldung, meldung
-    assert "zyklenn" in meldung
+    assert "screen_groups[0].screens[0].pages[0]" in meldung, meldung
+    assert "cyclesn" in meldung
 
 
 # ── Seiten und Zyklen (seit 0.10.0) ──────────────────────────────────────────
@@ -81,29 +81,29 @@ def gruppe_mit_seiten(**screen_extra):
 
 
 def test_eigene_zyklen_je_seite_werden_uebernommen():
-    app = pruefe(gruppe_mit_seiten(wechsel_zyklen=1,
-                                   seiten=[{"name": "A", "zyklen": 2},
-                                           {"name": "B", "zyklen": 1}]), "t")
+    app = pruefe(gruppe_mit_seiten(page_cycles=1,
+                                   pages=[{"name": "A", "cycles": 2},
+                                           {"name": "B", "cycles": 1}]), "t")
     seiten = app.panels[0].groups[0].screens[0].seiten
     assert [(s.name, s.zyklen) for s in seiten] == [("A", 2), ("B", 1)]
 
 
 def test_ohne_angabe_ist_zyklen_null():
     """0 means "inherit from the screen" — the whole point of the default."""
-    app = pruefe(gruppe_mit_seiten(seiten=[{"name": "A"}, {"name": "B"}]), "t")
+    app = pruefe(gruppe_mit_seiten(pages=[{"name": "A"}, {"name": "B"}]), "t")
     assert [s.zyklen for s in app.panels[0].groups[0].screens[0].seiten] == [0, 0]
 
 
 def test_negative_zyklen_werden_auf_null_gezogen():
-    app = pruefe(gruppe_mit_seiten(seiten=[{"name": "A", "zyklen": -5}]), "t")
+    app = pruefe(gruppe_mit_seiten(pages=[{"name": "A", "cycles": -5}]), "t")
     assert app.panels[0].groups[0].screens[0].seiten[0].zyklen == 0
 
 
 def test_widgets_und_seiten_zusammen_sind_ein_fehler():
     """Both would mean two places for the same tiles — which one wins is a coin toss."""
     with pytest.raises(ConfigError) as e:
-        pruefe(gruppe_mit_seiten(widgets=[], seiten=[{"name": "A"}]), "t")
-    assert "seiten" in str(e.value)
+        pruefe(gruppe_mit_seiten(widgets=[], pages=[{"name": "A"}]), "t")
+    assert "pages" in str(e.value)
 
 
 def test_ein_screen_ohne_seiten_bekommt_genau_eine():
