@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.21.6 — a hex code in the text field left the colour swatch cold
+
+Noticed by the user: typing a hex code does not change the colour field. `uebernimm()` set
+the text, the class and the title — but never `c.value`, the colour of the
+`<input type=color>` itself.
+
+★ **Why it never showed:** the other direction worked. Dragging the colour field leaves
+`c.value` already on the new value before `uebernimm()` runs — the function never had to
+set it. The bug was visible in one direction only.
+
+Two details found while building it:
+
+- The **short form** (`fff`) is accepted by the renderer (`_hex2rgb` expands it), but not
+  by an `<input type=color>` — it wants exactly six digits and **silently falls back to
+  black** for anything else. It is expanded first now.
+- While **typing**, only the colour follows, not the model: `uebernimm()` triggers the
+  preview, and doing that on every keystroke would be noise for nothing. An unfinished
+  entry (`ff88`) leaves the swatch alone instead of making it jump to black.
+
 ## 0.21.5 — `lines` painted outside its box
 
 Found by the user, with exactly the right question: "is it intentional that a fixed text

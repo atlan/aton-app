@@ -950,14 +950,35 @@ function feldBauen(f, pfad, knoten_) {
       c.classList.toggle('k-ungesetzt', !gesetzt);
       c.title = gesetzt ? wert : T('ui.nicht_gesetzt');
 
+      /* ⚠ Der Renderer nimmt auch die Kurzform (`fff` -> `ffffff`, siehe `_hex2rgb`),
+         ein <input type=color> aber NICHT — es will genau sechs Stellen und faellt bei
+         allem anderen stumm auf Schwarz zurueck. Deshalb hier ausschreiben statt dem
+         Browser eine ungueltige Zeichenkette hinzulegen. */
+      const sechsstellig = (v) => {
+        const h = String(v || '').replace('#', '').trim();
+        if (/^[0-9a-fA-F]{3}$/.test(h)) return h.split('').map((z) => z + z).join('');
+        return /^[0-9a-fA-F]{6}$/.test(h) ? h : null;
+      };
+
       const uebernimm = (v) => {
         setze(feldpfad, v || undefined);
         t.value = v || '';
+        /* ★★ DAS hier fehlte: das Farbfeld behielt seine alte Farbe, wenn man den
+           Hexcode ins Textfeld tippte. Andersherum ging es — beim Ziehen am Farbfeld
+           steht `c.value` ja schon auf dem neuen Wert, `uebernimm` musste ihn nie
+           setzen. Deshalb ist es nie aufgefallen. */
+        c.value = '#' + (sechsstellig(v) || ersatz);
         c.classList.toggle('k-ungesetzt', !v);
         c.title = v || T('ui.nicht_gesetzt');
         nachAenderung();
       };
       t.onchange = () => uebernimm(t.value.replace('#', '').trim());
+      /* Beim Tippen nur die FARBE mitziehen, nicht das Modell: `uebernimm` stoesst die
+         Vorschau an, und das bei jedem Tastendruck waere Unruhe fuer nichts. */
+      t.oninput = () => {
+        const h = sechsstellig(t.value);
+        if (h) { c.value = '#' + h; c.classList.remove('k-ungesetzt'); c.title = t.value.trim(); }
+      };
       c.oninput = () => uebernimm(c.value.slice(1));
 
       eingabe.append(t, c);
