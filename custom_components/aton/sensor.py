@@ -52,6 +52,14 @@ SENSOREN: tuple[MatrixSensorDescription, ...] = (
         # schlimmer als gar keine.
         wert=lambda p: (p.get("letzter_fehler") or "—")[:255],
     ),
+    MatrixSensorDescription(
+        key="bootbild", translation_key="bootbild",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # ★ Ohne diesen Sensor waere die Boot-Preset-Pruefung unsichtbar: im Gutfall
+        # schreibt sie nichts ins Protokoll, und man muesste sie scheitern lassen, um zu
+        # sehen, dass sie ueberhaupt lief. „in Ordnung" ist der Normalfall.
+        wert=lambda p: (p.get("bootbild") or "noch nicht geprüft")[:255],
+    ),
 )
 
 

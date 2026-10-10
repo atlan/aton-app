@@ -222,6 +222,12 @@ class PanelCfg:
     canvas_segment: int = 0
     scroll_segment: int = 1
     clear_segments_to: int = 32   # WLEDs MAX_NUM_SEGMENTS auf ESP32
+    # ★★ Beim Einschalten pruefen, ob WLED ein schwarzes Boot-Preset hat — und es
+    # anlegen, wenn nicht. Ohne das malt WLED beim Hochfahren seine Vorgabefarbe
+    # (RGB 255,160,0, ein volles Orange), bis Atons erstes Vollbild ankommt.
+    # Siehe `wled.WledTransport.bootbild_sichern`.
+    boot_preset: bool = True
+    boot_preset_slot: int = 1
 
     @property
     def hoechstes_scroll_segment(self) -> int:
@@ -921,6 +927,8 @@ def _panel(wert: Any, pfad: str, vorgaben: dict) -> PanelCfg:
         canvas_segment=_int(d.get("canvas_segment", 0), f"{pfad}.canvas_segment"),
         scroll_segment=_int(d.get("scroll_segment", 1), f"{pfad}.scroll_segment"),
         clear_segments_to=_int(d.get("clear_segments_to", 32), f"{pfad}.clear_segments_to"),
+        boot_preset=bool(d.get("boot_preset", True)),
+        boot_preset_slot=_int(d.get("boot_preset_slot", 1), f"{pfad}.boot_preset_slot"),
         dry_run=bool(d.get("dry_run", False)),
         led_pitch=(_float(d["led_pitch"], f"{pfad}.led_pitch") if d.get("led_pitch") else None),
         grid=grid,

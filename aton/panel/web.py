@@ -137,6 +137,10 @@ class WebUI:
                 "bytes": stat.letzte_bytes,
                 "fehler": stat.fehler,
                 "letzter_fehler": stat.letzter_fehler,
+                # Ergebnis der Boot-Preset-Pruefung. ★ Sie schweigt im Gutfall, und genau
+                # solche stillen Pruefungen sind es, die man spaeter fuer nie gelaufen
+                # haelt — deshalb steht ihr Zustand hier, sichtbar als Sensor.
+                "bootbild": stat.bootbild,
                 # Erreichbarkeit als ZUSTAND (siehe `Statistik.unerreichbar_seit`):
                 # eine Matrix, die eine Nacht lang stromlos war, ist ein Sachverhalt
                 # und keine 5888 Vorfaelle.

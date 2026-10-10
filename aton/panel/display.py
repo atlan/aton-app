@@ -62,6 +62,24 @@ class Notiz:
     channel: str | None = None
 
 
+def bootbild_start(panel: PanelCfg) -> tuple[bool, str]:
+    """Steht die Boot-Preset-Pruefung an, und was zeigt der Sensor bis dahin?
+
+    Rueckgabe: (faellig, Anfangslage).
+
+    Startwert `faellig=True`: nach einem Neustart der App weiss sie nicht, wie das Geraet
+    eingerichtet ist, und soll einmal nachsehen.
+
+    ⚠ Laeuft die Pruefung gar nicht, darf der Sensor nicht auf „noch nicht geprueft"
+    stehenbleiben — das waere eine Anzeige, die auf etwas warten laesst, das nie kommt.
+    """
+    if panel.dry_run:
+        return False, "Probelauf"
+    if not panel.boot_preset:
+        return False, "abgeschaltet"
+    return True, ""
+
+
 class Display:
     def __init__(self, panel: PanelCfg, ha: HomeAssistant,
                  fonts: FontRegistry, icons: IconRegistry, verlauf=None):
@@ -98,6 +116,9 @@ class Display:
         # Warum gerade nicht gesendet wird — Klartext fuer die Oberflaeche. Leer = es
         # wird gesendet.
         self.sendepause = ""
+        # Steht die Boot-Preset-Pruefung noch aus? Startwert True: nach einem Neustart der
+        # App weiss sie nicht, wie das Geraet eingerichtet ist, und soll einmal nachsehen.
+        self._bootbild_faellig, self.transport.stat.bootbild = bootbild_start(panel)
 
     # ==================================================================
     #  Anmeldung
@@ -428,6 +449,12 @@ class Display:
             self.transport._letztes = None
             self._frei_seit = time.time()
             _LOG.info("%s: eingeschaltet — Vollbild erzwungen", self.cfg.id)
+            # ★★ Und die Ursache gleich mit angehen: WLED malt beim Hochfahren seine
+            # Vorgabefarbe (volles Orange), solange kein schwarzes Boot-Preset liegt.
+            # Nur vormerken — das Geraet ist gerade erst eingeschaltet und braucht rund
+            # 20 Sekunden, bis es antwortet. Erledigt wird es beim ersten Takt, der
+            # wirklich durchkommt.
+            self._bootbild_faellig = self.cfg.boot_preset and not self.cfg.dry_run
         self._war_frei = frei
 
         if not frei:
@@ -466,6 +493,15 @@ class Display:
                 # mehr, was die App gerade darstellen WUERDE.
                 if not darf:
                     return
+                if self._bootbild_faellig:
+                    # ⚠ VOR dem Bild: die Pruefung stellt die Flaeche kurz auf Schwarz,
+                    # wenn sie etwas anlegen muss. Danach zeichnet das Vollbild ohnehin
+                    # alles neu — umgekehrt bliebe die Matrix bis zum naechsten Takt leer.
+                    lage = await self.transport.bootbild_sichern(session)
+                    self.transport.stat.bootbild = lage
+                    # „nicht geprueft" heisst: das Geraet hat nicht geantwortet, es faehrt
+                    # vermutlich noch hoch. Dann beim naechsten Takt noch einmal.
+                    self._bootbild_faellig = lage.startswith("nicht geprueft")
                 await self.transport.sende(session, ergebnis.bild, self.helligkeit(),
                                            ergebnis.scrolls, probe=probe)
                 self._rueckzug_fortschreiben()

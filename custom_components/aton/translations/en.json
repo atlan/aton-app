@@ -63,6 +63,9 @@
       },
       "letzter_fehler": {
         "name": "Last error"
+      },
+      "bootbild": {
+        "name": "Boot preset"
       }
     }
   }

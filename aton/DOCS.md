@@ -81,6 +81,18 @@ slider, the screen selectors and a list of values.
   only once the gate itself reports `on`, waits `gate.wartezeit` (default 90 s) and then
   tries anyway — that single attempt is what recovers a lost segment. While unreachable it
   backs off (10, 20, 40, 60 s) but keeps rendering, so the preview stays live.
+- **`boot_preset`** (default on) keeps the matrix **dark while it boots**. Without a boot
+  preset WLED powers up in its built-in default colour — RGB 255,160,0, a full orange
+  sheet — and holds it until Aton's first full frame lands, which takes as long as the
+  controller needs to boot, join Wi-Fi and have its config entry enabled (over two minutes
+  on one installation). Aton therefore checks on switch-on whether preset
+  `boot_preset_slot` (default 1) holds a black image and whether the device boots into it,
+  and creates it if not.
+  - It writes **only when something is actually missing** — `psave` and the config go into
+    the ESP's flash, and touching them on every switch-on would be wear for nothing.
+  - A preset on that slot that Aton did not create is **left alone** and reported in the
+    log. Move it with `boot_preset_slot`, or set `boot_preset: false` to keep Aton out of
+    the device's flash entirely.
 - **Brightness** without `brightness.entity` does **not survive a restart**. An
   `input_number` keeps it and makes it automatable.
 - ⚠ A brightness change sends a **full frame**: on a frozen segment the value alone does

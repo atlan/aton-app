@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.22.2 — the configurator showed screens with pages as empty
+
+Reported by the user: the tree showed a **0** behind the screen "Temp. & Hum." — no
+pages, no tiles — although it has two pages with eleven tiles each, and the display was
+drawing them just fine.
+
+This time it was **not a stale tab** (checksums of container and repository matched) but
+a regression dating back to the switch to English keys (`seiten:` → `pages:`): since
+then the server hands the description to the UI **migrated**, i.e. with `pages`, while
+the UI still looked for `sc.seiten`. Finding nothing, it fell back to the screen's empty
+`widgets` list — that "0" is exactly the signature of old code on new data. The same
+mix-up sat in the paths of the clickable rectangles in the preview (`_kacheln` on the
+server), in the page preselection for the preview, in the scaffold for "+ page", in the
+form group and in the move targets of a tile.
+
+All six places now say `pages`. Measured in a remote-controlled browser: "2×" behind the
+screen, "Temperatur 11" and "Feuchte" below it.
+
+★ Lesson: a "0" behind a screen means "the UI does not know the key". First compare
+checksums container vs. repository — equal means code regression, different means stale
+tab.
+
+## 0.22.1 — the boot preset check was invisible
+
+Follow-up to 0.22.0. In the good case the check writes **nothing** to the log — a state
+that later reads as "never ran". Exactly the kind of silence that triggered this whole
+affair: a setting that looks right and has no effect.
+
+Its result now lives in `Statistik.bootbild`, travels via `/api/status` and shows up as a
+diagnostic sensor **Boot preset** per display. The state texts are the app's German
+strings: `in Ordnung` (ok), `angelegt` (created), `Platz 1 fremd belegt (…)` (slot 1
+taken by someone else), `nicht geprüft (…)` (not checked).
+
+⚠ If the check does not run at all, the sensor does not say "not checked yet" but
+`abgeschaltet` (disabled, with `boot_preset: false`) or `Probelauf` (dry run, with
+`dry_run`) — a display that keeps you waiting for something that never comes would be
+worse than none.
+
+The decision sits in `display.bootbild_start()` instead of inline in `__init__`, so a
+test can check it rather than rebuild it.
+
+## 0.22.0 — the matrix no longer lights up orange when switched on
+
+Reported by the user: "the physical matrix shows nothing but solid orange", although the
+page was running. Measured on all three matrices of the installation — it was nowhere an
+Aton bug but **WLED's default colour**: without a boot preset (`cfg.def.ps == 0`) WLED
+paints RGB **255,160,0** across the whole surface at startup, and it stays until Aton's
+first full frame arrives. The controller hangs on the same power as the panels, so it has
+to boot and join Wi-Fi first — over two minutes for the side matrix.
+
+The full frame on power-on already existed; it only fixes the consequence, not the
+cause. Aton now **creates a black boot preset itself** if none is there (`boot_preset`,
+default on; slot via `boot_preset_slot`, default 1).
+
+★ The check runs on power-on, i.e. before the first full frame goes out — the boot colour
+is still on the surface at that point, so setting black destroys no picture.
+
+★ **It only writes if something is really missing.** `psave` and the configuration go to
+the ESP's flash. Measured on the device: on already set-up matrices the check costs two
+GETs and 0.13 s, on an empty one 4.9 s and three writes.
+
+★ A preset that does not come from Aton is left **untouched** — only a warning goes to
+the log. A preset is handiwork; overwriting it would be silent loss.
+
+## ⚠⚠ Five WLED traps, all found on the device and none in the mock test
+
+Every single one ended in a `{"success":true}` with nothing behind it. They live as
+regression tests in `tests/test_bootpreset.py`:
+
+1. **`psave` together with the state in ONE request is silently discarded.** It takes
+   two separate requests.
+2. **There has to be a pause between the two.** WLED processes state and `psave` in its
+   main loop; if the save follows too closely, it is swallowed. Without a pause even a
+   check after 2.6 s found nothing, with one second of spacing it worked immediately.
+3. **A frozen segment is not redrawn.** Setting `col` on it changes the JSON but not the
+   panel — `/json/state` reported black while orange kept glowing physically. Hence
+   `"frz": false`.
+4. **`GET /json/cfg` answers `null` right after a write** — HTTP 200, valid JSON, but no
+   dictionary. First `cfg["def"]` was empty, then `cfg` itself; the conversion now sits in
+   `_get`, at the one place where reading happens.
+5. **The verification must not read too early.** `presets.json` goes to flash, an
+   immediate GET still comes from the old state. The false alarm would be expensive: it
+   would write anew on every power-on.
+
+⚠ And a half-state nobody notices: **`cfg.def.ps` pointing at a non-existent preset is
+worse than none at all.** That is exactly how the entry matrix stood — a manual attempt
+that had failed on trap 1 earlier. WLED then simply paints its default again, and the
+setting looks right while doing so. Aton now sets this straight.
+
 ## 0.21.6 — a hex code in the text field left the colour swatch cold
 
 Noticed by the user: typing a hex code does not change the colour field. `uebernimm()` set

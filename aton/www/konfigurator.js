@@ -236,12 +236,15 @@ function baumZeichnen() {
         const kacheln = (liste, basis) => (liste || []).map((w, wi) =>
           knoten(kachelName(w), basis.concat([wi]), w.type || 'tile', lage(w)));
 
-        // Ein Screen mit `seiten:` bekommt eine Ebene mehr: die Seiten sind Fassungen
+        // Ein Screen mit `pages:` bekommt eine Ebene mehr: die Seiten sind Fassungen
         // DESSELBEN Screens (in der Auswahl steht nur er), und ihre Kacheln liegen an
         // denselben Stellen — ohne eigene Ebene waeren sie im Baum nicht zu trennen.
-        if (Array.isArray(sc.seiten)) {
-          const pl = sc.seiten.map((se, sj) => {
-            const ppfad = spfad.concat(['seiten', sj]);
+        // ⚠ Der Schluessel heisst seit fdd0455 `pages` (der Server migriert `seiten:`
+        // schon beim Holen). Mit `seiten` hier stand hinter jedem Screen mit Seiten
+        // eine „0“ und keine einzige Kachel — die Signatur alten Codes auf neuen Daten.
+        if (Array.isArray(sc.pages)) {
+          const pl = sc.pages.map((se, sj) => {
+            const ppfad = spfad.concat(['pages', sj]);
             // ★ Beim ERSTEN Auftauchen von selbst aufklappen. Sonst klappt man einen
             // Screen auf und sieht nur Seitennamen — die Kacheln, um die es geht, waeren
             // eine Ebene tiefer versteckt. Vor den Seiten sassen sie direkt darunter,
@@ -253,8 +256,8 @@ function baumZeichnen() {
                           kacheln(se.widgets, ppfad.concat(['widgets'])),
                           ppfad.concat(['widgets']));
           });
-          return knoten(sc.name, spfad, sc.seiten.length + '\u00d7', '', pl,
-                        spfad.concat(['seiten']));
+          return knoten(sc.name, spfad, sc.pages.length + '\u00d7', '', pl,
+                        spfad.concat(['pages']));
         }
         return knoten(sc.name, spfad, String((sc.widgets || []).length), '',
                       kacheln(sc.widgets, spfad.concat(['widgets'])),
@@ -304,7 +307,7 @@ function lage(w) {
 const GERUEST = {
   widgets: () => ({ type: 'tile', cell: [0, 0], icon: 'info', text: 'neu' }),
   screens: (n) => ({ name: 'screen' + (n + 1), widgets: [] }),
-  seiten: (n) => ({ name: 'Seite ' + (n + 1), widgets: [] }),
+  pages: (n) => ({ name: 'Seite ' + (n + 1), widgets: [] }),
   // `region` ist Pflicht. Ohne einen brauchbaren Vorschlag scheitert die Pruefung
   // sofort nach dem Anlegen — also den Bereich einer vorhandenen Gruppe uebernehmen,
   // sonst die ganze Anzeige.
@@ -446,14 +449,14 @@ function vorwahlAusAuswahl() {
    im Baum auf „Feuchte" klickte, sah unveraendert Temperaturen und hielt es fuer einen
    Fehler seiner Beschreibung; tatsaechlich entschied allein die Uhr im Renderer.
 
-   Auch der Pfad einer KACHEL laeuft hier durch (…,'seiten',m,'widgets',n) — sonst
+   Auch der Pfad einer KACHEL laeuft hier durch (…,'pages',m,'widgets',n) — sonst
    sprAenge die Vorschau beim Anklicken einer Kachel auf die falsche Seite zurueck. */
 function seitenVorwahlAusAuswahl() {
   const a = K.auswahl;
   if (!a || a[0] !== 'panels' || a[2] !== 'screen_groups') return {};
   const panel = (K.daten.panels || [])[a[1]];
   const gruppe = panel && (panel.screen_groups || [])[a[3]];
-  if (!gruppe || a[4] !== 'screens' || a[6] !== 'seiten') return {};
+  if (!gruppe || a[4] !== 'screens' || a[6] !== 'pages') return {};
   const j = Number(a[7]);
   return Number.isInteger(j) ? { [gruppe.id]: j } : {};
 }
@@ -735,7 +738,7 @@ function formularZeichnen() {
   if (gleich(pfad, ['defaults'])) { gruppe = 'defaults'; titel = T('ui.vorgaben'); }
   else if (vorletzter === 'widgets') { gruppe = 'widget'; titel = T('ui.widgets'); }
   else if (vorletzter === 'screens') { gruppe = 'screen'; titel = T('ui.screens'); }
-  else if (vorletzter === 'seiten') { gruppe = 'seite'; titel = T('ui.seiten'); }
+  else if (vorletzter === 'pages') { gruppe = 'seite'; titel = T('ui.seiten'); }
   else if (vorletzter === 'screen_groups') { gruppe = 'screen_group'; titel = T('ui.screen_gruppen'); }
   else if (letzter === 'notify') { gruppe = 'notify'; titel = T('ui.notify'); }
   else if (vorletzter === 'panels') { gruppe = 'panel'; titel = T('ui.anzeige'); }
@@ -1209,9 +1212,9 @@ function kachelZiele() {
       const gname = g.name || g.id || `#${gi}`;
       (g.screens || []).forEach((sc, si) => {
         const basis = ['panels', pi, 'screen_groups', gi, 'screens', si];
-        if (Array.isArray(sc.seiten) && sc.seiten.length) {
-          sc.seiten.forEach((se, sj) => ziele.push({
-            pfad: basis.concat(['seiten', sj, 'widgets']),
+        if (Array.isArray(sc.pages) && sc.pages.length) {
+          sc.pages.forEach((se, sj) => ziele.push({
+            pfad: basis.concat(['pages', sj, 'widgets']),
             text: `${anzeige} › ${gname} › ${sc.name || si} › ${se.name || `${T('ui.seiten')} ${sj + 1}`}`,
           }));
         } else {

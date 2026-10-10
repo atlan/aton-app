@@ -26,24 +26,47 @@
   },
   "entity": {
     "binary_sensor": {
-      "erreichbar": { "name": "Erreichbar" },
-      "zeigt_an": { "name": "Zeigt an" }
+      "erreichbar": {
+        "name": "Erreichbar"
+      },
+      "zeigt_an": {
+        "name": "Zeigt an"
+      }
     },
     "button": {
-      "vollbild": { "name": "Vollbild senden" }
+      "vollbild": {
+        "name": "Vollbild senden"
+      }
     },
     "number": {
-      "helligkeit": { "name": "Helligkeit" }
+      "helligkeit": {
+        "name": "Helligkeit"
+      }
     },
     "image": {
-      "vorschau": { "name": "Vorschau" }
+      "vorschau": {
+        "name": "Vorschau"
+      }
     },
     "sensor": {
-      "frames": { "name": "Bilder" },
-      "pixel": { "name": "Geänderte Pixel" },
-      "bytes": { "name": "Bytes je Bild" },
-      "fehler": { "name": "Sendefehler" },
-      "letzter_fehler": { "name": "Letzter Fehler" }
+      "frames": {
+        "name": "Bilder"
+      },
+      "pixel": {
+        "name": "Geänderte Pixel"
+      },
+      "bytes": {
+        "name": "Bytes je Bild"
+      },
+      "fehler": {
+        "name": "Sendefehler"
+      },
+      "letzter_fehler": {
+        "name": "Letzter Fehler"
+      },
+      "bootbild": {
+        "name": "Boot-Preset"
+      }
     }
   }
 }

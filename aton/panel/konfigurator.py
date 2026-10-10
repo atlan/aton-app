@@ -424,8 +424,10 @@ def _kacheln(cfg, panel, pi: int, aktiv: dict, seiten: dict | None = None) -> li
             sj = seiten.get(gruppe.id, 0) if seiten else 0
             sj = min(sj, len(screen.seiten) - 1)
             if len(screen.seiten) > 1:
+                # ⚠ Der Pfad muss die DATEI-Schreibweise treffen (`pages` seit fdd0455),
+                # sonst findet die Oberflaeche zum angeklickten Rechteck keinen Knoten.
                 sammle(screen.seiten[sj].widgets,
-                       ["panels", pi, "screen_groups", gi, "screens", si, "seiten", sj])
+                       ["panels", pi, "screen_groups", gi, "screens", si, "pages", sj])
             else:
                 sammle(screen.widgets,
                        ["panels", pi, "screen_groups", gi, "screens", si])

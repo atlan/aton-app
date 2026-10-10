@@ -102,6 +102,15 @@ PANEL: list[Feld] = [
          "ein Segment hat", vorgabe=1, min=0, max=255),
     Feld("clear_segments_to", "int", "Altsegmente räumen bis",
          "WLEDs MAX_NUM_SEGMENTS, auf ESP32 normalerweise 32", vorgabe=32, min=2, max=255),
+    Feld("boot_preset", "bool", "Schwarz beim Hochfahren",
+         "Beim Einschalten prüfen, ob WLED ein schwarzes Boot-Preset hat, und es anlegen, "
+         "wenn nicht. Ohne das leuchtet die Matrix nach dem Einschalten vollflächig in "
+         "WLEDs Vorgabefarbe (ein kräftiges Orange), bis das erste Vollbild ankommt. "
+         "Geschrieben wird nur, wenn wirklich etwas fehlt — es geht in den Flash des ESP",
+         vorgabe=True),
+    Feld("boot_preset_slot", "int", "Platz des Boot-Presets",
+         "Welchen Preset-Platz Aton dafür belegt. Steht dort schon ein fremdes Preset, "
+         "lässt Aton es unangetastet und meldet das nur", vorgabe=1, min=1, max=250),
     Feld("led_pitch", "float", "LED-Abstand",
          "Rastermaß der Matrix in Millimetern (P3 = 3,0). Wirkt NUR auf die Darstellung: "
          "die Vorschau wird darauf bezogen skaliert — zwei Anzeigen stehen damit im "

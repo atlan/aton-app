@@ -14,6 +14,7 @@ also vorgesehen und kein Trick.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -30,6 +31,24 @@ from .render import ScrollAuftrag
 _LOG = logging.getLogger(__name__)
 
 CHUNK = 900          # Werte je Anfrage — bleibt unter der ~16-kB-Grenze
+
+#: Name des von Aton angelegten Boot-Presets. ⚠ Er ist die KENNUNG: nur ein Preset mit
+#: genau diesem Namen fasst Aton wieder an. Alles andere auf dem Platz gilt als fremd und
+#: bleibt unberuehrt. Deshalb darf er sich nicht mehr aendern — sonst legt eine neue
+#: Fassung neben dem alten ein zweites an und ruehrt das alte nie wieder an.
+BOOT_PRESET_NAME = "Aton Boot schwarz"
+
+#: Wie oft und mit welchem Abstand nach dem Schreiben nachgesehen wird. WLED legt
+#: `presets.json` im Flash ab und beantwortet ein sofortiges GET noch aus dem alten
+#: Stand — einmal nachsehen reicht nachweislich nicht.
+VERIFY_VERSUCHE = 5
+VERIFY_PAUSE_S = 0.4
+
+#: Abstand zwischen dem Zustandsschreiben und dem `psave` — und wie oft der ganze
+#: Schreibanlauf wiederholt wird. WLED arbeitet beides in seiner Hauptschleife ab und
+#: verschluckt das Speichern, wenn es zu dicht folgt (17.08.2026 am Geraet gemessen).
+SPEICHER_PAUSE_S = 1.0
+SCHREIB_VERSUCHE = 3
 
 #: Wie viele Zeichen WLEDs Segmentname traegt — und damit eine Laufschrift.
 #: `WLED_MAX_SEGNAME_LEN` in WLEDs `const.h`: 48 auf ESP32, 32 auf ESP8266. Die kleinere
@@ -69,6 +88,9 @@ class Statistik:
     #: **5888 Sendefehler** — 5888 Vorfaelle fuer eine einzige Ursache. Eine Zeile
     #: „nicht erreichbar seit 02:41" sagt dasselbe und stimmt die ganze Zeit ueber.
     unerreichbar_seit: float = 0.0
+    #: Ergebnis der letzten Boot-Preset-Pruefung (siehe `bootbild_sichern`). Leer heisst
+    #: „noch nicht geprueft"; „in Ordnung" ist der Normalfall.
+    bootbild: str = ""
 
 
 class WledTransport:
@@ -90,6 +112,132 @@ class WledTransport:
     def vollbild_erzwingen(self) -> None:
         """Naechstes Bild vollstaendig senden (nach WLED-Neustart oder auf Zuruf)."""
         self._letztes = None
+
+    # ------------------------------------------------------------------
+    async def bootbild_sichern(self, session: aiohttp.ClientSession) -> str:
+        """Dafuer sorgen, dass WLED beim Hochfahren SCHWARZ zeigt statt seiner Vorgabe.
+
+        ★★ Das Problem, am 17.08.2026 an allen drei Matrizen der Anlage gemessen: ohne
+        Boot-Preset (`cfg.def.ps == 0`) malt WLED beim Einschalten seine eingebaute
+        Vorgabefarbe — RGB **255,160,0**, eine vollflaechig orange Leuchtflaeche. Die
+        steht, bis Atons erstes Vollbild ankommt, und das dauert: ESP booten, ins WLAN,
+        Konfigurationseintrag aktivieren. Bei der Seiten-Matrix waren das ueber zwei
+        Minuten. Das Vollbild beim Einschalten (siehe `display._takt`) behebt nur die
+        Folge, nicht die Ursache — die Luecke selbst bleibt.
+
+        Diese Methode laeuft beim EINSCHALTEN, also bevor das erste Vollbild rausgeht.
+        Der Zeitpunkt ist mit Absicht gewaehlt: dort steht ohnehin noch WLEDs Bootfarbe
+        auf der Flaeche, das Schwarzsetzen zerstoert also kein Bild — und dieser Start
+        ist gleich mit repariert.
+
+        Rueckgabe: eine kurze Lagebeschreibung fuer Protokoll und Statistik.
+
+        ⚠⚠ Drei Fallen, alle am Geraet erlebt und der Grund fuer den umstaendlichen Ablauf:
+
+        1. **`psave` zusammen mit dem Zustand in EINER Anfrage wird still verworfen.**
+           WLED antwortet `{"success":true}` und legt nichts an. Es braucht zwei
+           getrennte Anfragen: erst den Zustand setzen, dann speichern.
+        2. **Ein eingefrorenes Segment wird nicht neu gezeichnet.** Schreibt man `col`
+           auf ein Segment mit `frz: true`, aendert sich das JSON, aber der alte
+           Pixelpuffer bleibt stehen — `/json/state` meldet dann Schwarz, waehrend
+           physisch weiter Orange leuchtet. Deshalb `"frz": false` beim Setzen.
+        3. **`cfg.def.ps` auf ein nicht existierendes Preset ist schlimmer als gar
+           keins** und faellt niemandem auf, weil WLED dann einfach wieder seine Vorgabe
+           malt. Genau so stand die Entry-Matrix da — eine frueher gescheiterte
+           Handanlegung. Deshalb wird am Ende zurueckgelesen.
+        """
+        p = self.panel
+        slot = str(p.boot_preset_slot)
+        try:
+            presets = await self._get(session, "/presets.json")
+            cfg = await self._get(session, "/json/cfg")
+        except Unerreichbar as e:
+            return f"nicht geprueft ({e})"
+
+        vorhanden = presets.get(slot) or {}
+        name = vorhanden.get("n")
+        belegt = bool(vorhanden.get("seg") or vorhanden.get("playlist") or name)
+        if belegt and name != BOOT_PRESET_NAME:
+            # ★ Fremdes Preset: nicht anfassen. Ein Preset ist Handarbeit des Nutzers,
+            # und es zu ueberschreiben waere ein stiller Datenverlust.
+            _LOG.warning(
+                "WLED %s (%s): Preset %s ist mit %s belegt — Aton laesst es in Ruhe. "
+                "Die Matrix zeigt beim Einschalten weiter WLEDs Vorgabefarbe. Abhilfe: "
+                "`boot_preset_slot` auf einen freien Platz stellen oder `boot_preset: "
+                "false` setzen.", p.id, p.host, slot, repr(name) if name else "einem namenlosen Preset")
+            return f"Platz {slot} fremd belegt ({name or 'ohne Namen'})"
+
+        schwarz = _ist_schwarz(vorhanden, p.canvas_segment)
+        if belegt and schwarz and _boot_ps(cfg) == p.boot_preset_slot:
+            # ⚠ Der haeufige Fall — und er darf NICHTS schreiben. `psave` und die
+            # Konfiguration gehen in den Flash des ESP; sie bei jedem Einschalten
+            # anzufassen waere Verschleiss ohne Gegenwert.
+            return "in Ordnung"
+
+        try:
+            for anlauf in range(SCHREIB_VERSUCHE):
+                await self._setze_schwarz(session)
+                # ⚠⚠ Diese Pause ist nicht Zierrat, sie ist der Unterschied zwischen
+                # „klappt" und „klappt nicht". WLED arbeitet Zustand und `psave` in seiner
+                # Hauptschleife ab; folgt das Speichern zu dicht auf das Schreiben, wird
+                # es verschluckt — Antwort `{"success":true}`, `presets.json` unveraendert.
+                # Am 17.08.2026 beides gemessen: von Hand mit einer Sekunde Abstand ging
+                # es, dieselbe Folge ohne Abstand legte auch nach 2,6 s Nachsehen nichts an.
+                await asyncio.sleep(SPEICHER_PAUSE_S)
+                await self._post(session, {"psave": p.boot_preset_slot,
+                                           "n": BOOT_PRESET_NAME, "ib": True, "sb": True})
+                await self._post_cfg(session, {"def": {"ps": p.boot_preset_slot,
+                                                       "on": True, "bri": 128}})
+                # ⚠ Nicht dem `{"success":true}` glauben — genau das hat gelogen (Falle 1).
+                #
+                # ⚠ Aber auch nicht zu frueh nachsehen: WLED legt `presets.json` im Flash
+                # ab und beantwortet ein sofortiges GET noch aus dem alten Stand. Ein
+                # Falschalarm waere teuer — er wuerde bei JEDEM Einschalten neu schreiben.
+                for versuch in range(VERIFY_VERSUCHE):
+                    if versuch:
+                        await asyncio.sleep(VERIFY_PAUSE_S)
+                    presets = await self._get(session, "/presets.json")
+                    cfg = await self._get(session, "/json/cfg")
+                    if (_ist_schwarz(presets.get(slot) or {}, p.canvas_segment)
+                            and _boot_ps(cfg) == p.boot_preset_slot):
+                        break
+                else:
+                    continue        # nichts angekommen — ganzen Anlauf wiederholen
+                break
+        except Unerreichbar as e:
+            # Mittendrin abgerissen. Was auf dem Geraet steht, weiss jetzt niemand —
+            # also beim naechsten Takt noch einmal, und ein Vollbild dazu.
+            self._letztes = None
+            return f"nicht geprueft ({e})"
+
+        neu = presets.get(slot) or {}
+        if not _ist_schwarz(neu, p.canvas_segment):
+            _LOG.warning("WLED %s (%s): Boot-Preset %s liess sich nicht anlegen — die "
+                         "Matrix zeigt beim Einschalten weiter WLEDs Vorgabefarbe.",
+                         p.id, p.host, slot)
+            lage = f"Preset {slot} liess sich nicht anlegen"
+        elif _boot_ps(cfg) != p.boot_preset_slot:
+            _LOG.warning("WLED %s (%s): Preset %s liegt, aber der Bootweg zeigt nicht "
+                         "darauf (cfg.def = %r).", p.id, p.host, slot, cfg.get("def"))
+            lage = f"Bootweg zeigt nicht auf Preset {slot}"
+        else:
+            _LOG.info("WLED %s (%s): Boot-Preset %s angelegt — die Matrix bleibt beim "
+                      "Hochfahren dunkel statt orange.", p.id, p.host, slot)
+            lage = "angelegt"
+        # In JEDEM dieser Faelle steht auf der Flaeche jetzt Schwarz, das Aton selbst
+        # geschrieben und nicht gezeichnet hat. Ohne Vollbild bliebe die Matrix dunkel.
+        self._letztes = None
+        return lage
+
+    async def _setze_schwarz(self, session: aiohttp.ClientSession) -> None:
+        """Die Bildflaeche auf Schwarz stellen — sichtbar, nicht nur im JSON.
+
+        ⚠ `"frz": False` ist der Kern: auf einem eingefrorenen Segment aendert eine neue
+        Farbe nur den Wert, nicht die Anzeige (Falle 2 oben).
+        """
+        await self._post(session, {"on": True, "seg": [
+            {"id": self.panel.canvas_segment, "on": True, "frz": False,
+             "fx": 0, "pal": 0, "col": [[0, 0, 0], [0, 0, 0], [0, 0, 0]]}]})
 
     # ------------------------------------------------------------------
     async def sende(self, session: aiohttp.ClientSession, bild: Image.Image, bri: int,
@@ -318,6 +466,45 @@ class WledTransport:
         return sauber[:MAX_SEGMENTNAME]
 
     # ------------------------------------------------------------------
+    async def _get(self, session: aiohttp.ClientSession, pfad: str) -> dict:
+        """Etwas vom Geraet lesen. Wirft `Unerreichbar` im Fehlerfall.
+
+        ⚠ Anders als `_post` verbucht das hier KEINEN Sendefehler: gelesen wird nur fuer
+        die Boot-Preset-Pruefung, und die ist eine Nebensache. Faellt sie aus, ist das
+        kein Grund, die Anzeige als gestoert zu melden.
+
+        ⚠⚠ Der Rueckgabewert ist IMMER ein Woerterbuch. Am 17.08.2026 am Geraet
+        aufgeflogen: unmittelbar nach einem Konfigurationsschreibvorgang antwortet WLED
+        auf `GET /json/cfg` mit einem nackten `null` — HTTP 200, gueltiges JSON, aber
+        `None`. Jede Auswertestelle einzeln dagegen abzusichern hat schon einmal nicht
+        gereicht (erst war `cfg["def"]` leer, dann `cfg` selbst); die Umwandlung gehoert
+        an die eine Stelle, an der gelesen wird.
+        """
+        url = f"http://{self.panel.host}{pfad}"
+        try:
+            async with session.get(url) as antwort:
+                if antwort.status != 200:
+                    raise Unerreichbar(f"HTTP {antwort.status} auf {pfad}")
+                nutzlast = await antwort.json(content_type=None)
+        except Unerreichbar:
+            raise
+        except Exception as e:
+            raise Unerreichbar(f"{type(e).__name__}: {e}") from e
+        return nutzlast if isinstance(nutzlast, dict) else {}
+
+    async def _post_cfg(self, session: aiohttp.ClientSession, daten: dict) -> None:
+        """In WLEDs Konfiguration schreiben (`/json/cfg`), nicht in den Zustand."""
+        url = f"http://{self.panel.host}/json/cfg"
+        try:
+            async with session.post(url, data=_json_bytes(daten),
+                                    headers={"Content-Type": "application/json"}) as a:
+                if a.status != 200:
+                    raise Unerreichbar(f"HTTP {a.status} auf /json/cfg")
+        except Unerreichbar:
+            raise
+        except Exception as e:
+            raise Unerreichbar(f"{type(e).__name__}: {e}") from e
+
     async def _post(self, session: aiohttp.ClientSession, daten: dict) -> int:
         """Einen Block senden. Rueckgabe: gesendete Bytes. Wirft `Unerreichbar` im Fehlerfall.
 
@@ -367,3 +554,34 @@ class WledTransport:
 
 def _json_bytes(daten: dict) -> bytes:
     return json.dumps(daten, separators=(",", ":")).encode("utf-8")
+
+
+def _boot_ps(cfg: dict) -> int | None:
+    """Auf welches Preset zeigt der Bootweg? `None`, wenn auf keins.
+
+    ⚠⚠ Am Geraet aufgefallen und nicht im Attrappen-Test: WLED antwortet auf ein `GET
+    /json/cfg` **unmittelbar nach** einem Konfigurationsschreibvorgang mit
+    `{"def": null}` — der Schluessel ist also da, aber leer. `cfg.get("def", {})` greift
+    nur bei FEHLENDEM Schluessel und liefert dann None; der Zugriff darauf flog mit
+    `AttributeError` aus der Pruefung heraus. Deshalb `or {}` statt eines Vorgabewerts.
+    """
+    d = cfg.get("def") or {}
+    try:
+        return int(d.get("ps"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _ist_schwarz(preset: dict, segment: int) -> bool:
+    """Malt dieses Preset die Bildflaeche schwarz?
+
+    Geprueft wird die Primaerfarbe des Bildsegments — sie ist es, die WLED bei `fx: 0`
+    (Solid) ueber die ganze Flaeche legt. ⚠ Nicht ueber die blosse Existenz des Presets
+    gehen: bei der Entry-Matrix zeigte `cfg.def.ps` auf einen Platz, auf dem nichts lag.
+    """
+    for seg in preset.get("seg") or []:
+        if seg.get("id", 0) != segment:
+            continue
+        farben = seg.get("col") or []
+        return bool(farben) and list(farben[0])[:3] == [0, 0, 0]
+    return False
